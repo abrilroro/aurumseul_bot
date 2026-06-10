@@ -23,7 +23,8 @@ const EMOJIS  = {'Aurum House':'🥇','PE':'🔵','EC':'🟢','CR':'🟣','Corm'
 // ══════════════════════════════════════
 // ESTADO DE CONVERSACION
 // ══════════════════════════════════════
-const userState = {}; // { chatId: { equipo, step } }
+const userState = {}; // { chatId: { equipo, step, auth } }
+const ACCESS_KEY = 'Claveincorrecta20!';
 
 // ══════════════════════════════════════
 // HELPERS
@@ -345,8 +346,26 @@ async function processUpdate(update) {
     const chatId = update.message.chat.id;
     const text = (update.message.text || '').trim();
 
+    // Check if waiting for password
+    if (userState[chatId] && userState[chatId].waitingAuth) {
+      if (text === ACCESS_KEY) {
+        userState[chatId] = { auth: true };
+        await sendMessage(chatId, '✅ *Acceso concedido!*\n\nBienvenido al bot de Aurum Seul.');
+        await sendEquipoMenu(chatId);
+      } else {
+        await sendMessage(chatId, '❌ *Clave incorrecta.* Intenta de nuevo:');
+      }
+      return;
+    }
+
+    // Check auth
+    if (!userState[chatId] || !userState[chatId].auth) {
+      userState[chatId] = { waitingAuth: true };
+      await sendMessage(chatId, '🔐 *Bot de Aurum Seul*\n\nIngresa la clave de acceso:');
+      return;
+    }
+
     if (text === '/start' || text === '/menu') {
-      userState[chatId] = {};
       await sendMessage(chatId, '👋 *Bienvenido al bot de Aurum Seul!*\n\nConsulta ingresos, targets y nómina de cada equipo en tiempo real.');
       await sendEquipoMenu(chatId);
     } else if (text === '/resumen') {
@@ -366,6 +385,12 @@ async function processUpdate(update) {
 
     // Responder al callback para quitar el loading
     await tgRequest('answerCallbackQuery', { callback_query_id: update.callback_query.id });
+
+    // Check auth
+    if (!userState[chatId] || !userState[chatId].auth) {
+      await sendMessage(chatId, '🔐 Ingresa la clave de acceso primero. Escribe /start');
+      return;
+    }
 
     if (data.startsWith('eq:')) {
       const equipo = data.replace('eq:', '');

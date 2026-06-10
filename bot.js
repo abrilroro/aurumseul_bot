@@ -23,8 +23,25 @@ const EMOJIS  = {'Aurum House':'🥇','PE':'🔵','EC':'🟢','CR':'🟣','Corm'
 // ══════════════════════════════════════
 // ESTADO DE CONVERSACION
 // ══════════════════════════════════════
-const userState = {}; // { chatId: { equipo, step, auth } }
+const userState = {}; // { chatId: { equipo, step } }
 const ACCESS_KEY = 'Claveincorrecta20!';
+const fs = require('fs');
+const AUTH_FILE = '/tmp/aurum_auth.json';
+
+// Load authenticated users from file
+let authorizedUsers = new Set();
+try {
+  const data = fs.readFileSync(AUTH_FILE, 'utf8');
+  authorizedUsers = new Set(JSON.parse(data));
+  console.log('Loaded', authorizedUsers.size, 'authorized users');
+} catch(e) { authorizedUsers = new Set(); }
+
+function saveAuth() {
+  try { fs.writeFileSync(AUTH_FILE, JSON.stringify([...authorizedUsers])); } catch(e) {}
+}
+
+function isAuth(chatId) { return authorizedUsers.has(String(chatId)); }
+function addAuth(chatId) { authorizedUsers.add(String(chatId)); saveAuth(); }
 
 // ══════════════════════════════════════
 // HELPERS
@@ -349,7 +366,8 @@ async function processUpdate(update) {
     // Check if waiting for password
     if (userState[chatId] && userState[chatId].waitingAuth) {
       if (text === ACCESS_KEY) {
-        userState[chatId] = { auth: true };
+        addAuth(chatId);
+        userState[chatId] = {};
         await sendMessage(chatId, '✅ *Acceso concedido!*\n\nBienvenido al bot de Aurum Seul.');
         await sendEquipoMenu(chatId);
       } else {
@@ -359,7 +377,7 @@ async function processUpdate(update) {
     }
 
     // Check auth
-    if (!userState[chatId] || !userState[chatId].auth) {
+    if (!isAuth(chatId)) {
       userState[chatId] = { waitingAuth: true };
       await sendMessage(chatId, '🔐 *Bot de Aurum Seul*\n\nIngresa la clave de acceso:');
       return;
@@ -387,7 +405,7 @@ async function processUpdate(update) {
     await tgRequest('answerCallbackQuery', { callback_query_id: update.callback_query.id });
 
     // Check auth
-    if (!userState[chatId] || !userState[chatId].auth) {
+    if (!isAuth(chatId)) {
       await sendMessage(chatId, '🔐 Ingresa la clave de acceso primero. Escribe /start');
       return;
     }

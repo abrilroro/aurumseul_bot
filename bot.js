@@ -7,13 +7,14 @@ const http = require('http');
 const TOKEN = process.env.BOT_TOKEN || '8868834232:AAFS63UfIOVVqWv9IT3tlg3bKL5xUokoxHY';
 const API = `https://api.telegram.org/bot${TOKEN}`;
 
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby0RIPOqvAKS-4dKMGo90-0s0XOUNp2vysGDdqCdXHDIRRKE-aDI7XE3rQ6FSFoOtkF/exec';
 const SHEETS = {
-  ingresos:  'https://docs.google.com/spreadsheets/d/e/2PACX-1vQXMLvGSvUJNRZ1hDZcLQ3XGSsK2qWad9DrI_VE71C0F4xYHEKde8bQvpizI6Tw63DQwLr-ZB3XhwiR/pub?gid=0&single=true&output=csv',
-  resumen:   'https://docs.google.com/spreadsheets/d/e/2PACX-1vQXMLvGSvUJNRZ1hDZcLQ3XGSsK2qWad9DrI_VE71C0F4xYHEKde8bQvpizI6Tw63DQwLr-ZB3XhwiR/pub?gid=1671154283&single=true&output=csv',
-  equipo:    'https://docs.google.com/spreadsheets/d/e/2PACX-1vQXMLvGSvUJNRZ1hDZcLQ3XGSsK2qWad9DrI_VE71C0F4xYHEKde8bQvpizI6Tw63DQwLr-ZB3XhwiR/pub?gid=882719008&single=true&output=csv',
-  nomina:    'https://docs.google.com/spreadsheets/d/e/2PACX-1vQXMLvGSvUJNRZ1hDZcLQ3XGSsK2qWad9DrI_VE71C0F4xYHEKde8bQvpizI6Tw63DQwLr-ZB3XhwiR/pub?gid=1093401132&single=true&output=csv',
-  targets:   'https://docs.google.com/spreadsheets/d/e/2PACX-1vQXMLvGSvUJNRZ1hDZcLQ3XGSsK2qWad9DrI_VE71C0F4xYHEKde8bQvpizI6Tw63DQwLr-ZB3XhwiR/pub?gid=1441875397&single=true&output=csv',
-  dashboard: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQXMLvGSvUJNRZ1hDZcLQ3XGSsK2qWad9DrI_VE71C0F4xYHEKde8bQvpizI6Tw63DQwLr-ZB3XhwiR/pub?gid=647688392&single=true&output=csv',
+  ingresos:  SCRIPT_URL + '?sheet=Ingresos',
+  resumen:   SCRIPT_URL + '?sheet=Resumen',
+  equipo:    SCRIPT_URL + '?sheet=Equipo',
+  nomina:    SCRIPT_URL + '?sheet=Nomina',
+  targets:   SCRIPT_URL + '?sheet=Targets',
+  dashboard: SCRIPT_URL + '?sheet=Dashboard',
 };
 
 const EQUIPOS = ['Aurum House','PE','EC','CR','Corm','Orbex','Seul'];
@@ -88,16 +89,33 @@ function getMesActual(data) {
 // ══════════════════════════════════════
 let cache = { data: null, ts: 0 };
 
+async function fetchJSON(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, (res) => {
+      // Follow redirects
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return fetchJSON(res.headers.location).then(resolve).catch(reject);
+      }
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch(e) { resolve([]); }
+      });
+    }).on('error', reject);
+  });
+}
+
 async function getData() {
   const now = Date.now();
   if (cache.data && now - cache.ts < 5 * 60 * 1000) return cache.data;
   try {
     const [ing, res, eq, nom, tgt] = await Promise.all([
-      fetchUrl(SHEETS.ingresos).then(parseCSV),
-      fetchUrl(SHEETS.resumen).then(parseCSV),
-      fetchUrl(SHEETS.equipo).then(parseCSV),
-      fetchUrl(SHEETS.nomina).then(parseCSV),
-      fetchUrl(SHEETS.targets).then(parseCSV),
+      fetchJSON(SHEETS.ingresos),
+      fetchJSON(SHEETS.resumen),
+      fetchJSON(SHEETS.equipo),
+      fetchJSON(SHEETS.nomina),
+      fetchJSON(SHEETS.targets),
     ]);
     // Normalizar
     const normEq = e => {

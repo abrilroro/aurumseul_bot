@@ -186,10 +186,12 @@ async function getData() {
 // ══════════════════════════════════════
 // RESPUESTAS DEL BOT
 // ══════════════════════════════════════
-async function responderIngresos(equipo) {
+async function responderIngresos(equipo, mesFiltro=null, mesYear=null) {
   const { ing } = await getData();
-  const mes = getMesActual(ing);
-  const data = ing.filter(r => r['Equipo'] === equipo && (!mes || (r['Mes'] || '').toLowerCase() === mes));
+  const MESES_I = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  const mes = mesFiltro || MESES_I[new Date().getMonth()];
+  const yr = mesYear || String(new Date().getFullYear());
+  const data = ing.filter(r => r['Equipo'] === equipo && (r['Mes'] || '').toLowerCase().includes(mes) && (r['Mes'] || '').includes(yr.slice(-2)));
   if (!data.length) return `❌ No hay ingresos registrados para *${equipo}* en ${mes || 'este período'}.`;
 
   const total = data.reduce((a, r) => a + r._v, 0);
@@ -211,9 +213,11 @@ async function responderIngresos(equipo) {
   return msg;
 }
 
-async function responderTargets(equipo) {
+async function responderTargets(equipo, mesFiltro=null, mesYear=null) {
   const { tgt, ing } = await getData();
-  const mes = getMesActual(ing);
+  const MESES_TT = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  const mes = mesFiltro || MESES_TT[new Date().getMonth()];
+  const yr = mesYear || String(new Date().getFullYear());
   const MESES_T = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
   const mesNombreT = MESES_T[new Date().getMonth()];
 
@@ -231,7 +235,7 @@ async function responderTargets(equipo) {
 
   // Ingresos del mes actual por agente
   const ingByAg = {};
-  ing.filter(r => r['Equipo'] === equipo && (!mes || (r['Mes'] || '').toLowerCase() === mes))
+  ing.filter(r => r['Equipo'] === equipo && (r['Mes'] || '').toLowerCase().includes(mes))
      .forEach(r => { const n = norm(r['Agente']); ingByAg[n] = (ingByAg[n] || 0) + r._v; });
 
   const getIng = name => {
@@ -377,17 +381,39 @@ function sendEquipoMenu(chatId) {
 }
 
 function sendAccionMenu(chatId, equipo) {
-  return sendMessage(chatId, `${EMOJIS[equipo] || '🏢'} *${equipo}*\n\n¿Qué información quieres ver?`, {
+  const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  const mesActual = MESES[new Date().getMonth()] + ' ' + new Date().getFullYear();
+  return sendMessage(chatId, `${EMOJIS[equipo] || '🏢'} *${equipo}*
+
+📅 Mes: _${mesActual}_
+
+¿Qué información quieres ver?`, {
     reply_markup: {
       inline_keyboard: [
         [{ text: '💰 Ingresos', callback_data: `acc:ingresos` }],
         [{ text: '🎯 Targets', callback_data: `acc:targets` }],
         [{ text: '💳 Nómina', callback_data: `acc:nomina` }],
         [{ text: '📊 Resumen General', callback_data: `acc:resumen` }],
+        [{ text: '📅 Cambiar mes', callback_data: `acc:mes` }],
         [{ text: '◀️ Cambiar equipo', callback_data: `acc:cambiar` }],
       ]
     }
   });
+}
+
+function sendMesMenu(chatId, equipo) {
+  const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  const year = new Date().getFullYear();
+  const mesActual = new Date().getMonth();
+  const buttons = [];
+  for (let i = 0; i <= 5; i++) {
+    let idx = mesActual - i;
+    let yr = year;
+    if (idx < 0) { idx += 12; yr--; }
+    buttons.push([{ text: `📅 ${MESES[idx]} ${yr}`, callback_data: `mes:${MESES[idx]}:${yr}` }]);
+  }
+  buttons.push([{ text: '◀️ Volver', callback_data: `eq:${equipo}` }]);
+  return sendMessage(chatId, '📅 *Selecciona el mes:*', { reply_markup: { inline_keyboard: buttons } });
 }
 
 // ══════════════════════════════════════
@@ -448,15 +474,30 @@ async function processUpdate(update) {
 
     if (data.startsWith('eq:')) {
       const equipo = data.replace('eq:', '');
-      userState[chatId] = { equipo };
+      const mesSaved = (userState[chatId] || {}).mes;
+      userState[chatId] = { equipo, mes: mesSaved };
+      await sendAccionMenu(chatId, equipo);
+
+    } else if (data.startsWith('mes:')) {
+      const parts = data.split(':');
+      const mesNombre = parts[1];
+      const mesYear = parts[2];
+      userState[chatId] = { ...userState[chatId], mes: mesNombre, mesYear };
+      const equipo = (userState[chatId] || {}).equipo;
+      await sendMessage(chatId, `✅ Mes cambiado a *${mesNombre} ${mesYear}*`);
       await sendAccionMenu(chatId, equipo);
 
     } else if (data.startsWith('acc:')) {
       const accion = data.replace('acc:', '');
       const equipo = (userState[chatId] || {}).equipo;
 
+      if (accion === 'mes') {
+        await sendMesMenu(chatId, equipo);
+        return;
+      }
+
       if (accion === 'cambiar' || !equipo) {
-        userState[chatId] = {};
+        userState[chatId] = { mes: (userState[chatId] || {}).mes, mesYear: (userState[chatId] || {}).mesYear };
         await sendEquipoMenu(chatId);
         return;
       }
@@ -464,10 +505,12 @@ async function processUpdate(update) {
       await sendMessage(chatId, `⏳ Consultando datos de *${equipo}*...`);
       let respuesta = '';
       try {
-        if (accion === 'ingresos') respuesta = await responderIngresos(equipo);
-        else if (accion === 'targets') respuesta = await responderTargets(equipo);
-        else if (accion === 'nomina') respuesta = await responderNomina(equipo);
-        else if (accion === 'resumen') respuesta = await responderResumen(equipo);
+        const mesFiltro = (userState[chatId] || {}).mes || null;
+        const mesYearFiltro = (userState[chatId] || {}).mesYear || null;
+        if (accion === 'ingresos') respuesta = await responderIngresos(equipo, mesFiltro, mesYearFiltro);
+        else if (accion === 'targets') respuesta = await responderTargets(equipo, mesFiltro, mesYearFiltro);
+        else if (accion === 'nomina') respuesta = await responderNomina(equipo, mesFiltro);
+        else if (accion === 'resumen') respuesta = await responderResumen(equipo, mesFiltro);
       } catch (e) {
         respuesta = '❌ Error al obtener datos. Intenta de nuevo.';
         console.error(e);

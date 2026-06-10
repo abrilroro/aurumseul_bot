@@ -216,10 +216,20 @@ async function responderTargets(equipo) {
   const mes = getMesActual(ing);
   const MESES_T = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
   const mesNombreT = MESES_T[new Date().getMonth()];
-  const data = tgt.filter(r => r['Equipo'] === equipo && r._tgt > 0 && (r['Mes'] || '').toLowerCase().includes(mesNombreT));
-  if (!data.length) return `❌ No hay targets registrados para *${equipo}* en ${mes || 'este período'}.`;
 
-  const norm = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  // Columna A = Nombre agente, C = Target, D = Equipo
+  const norm = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+  const normEqName = e => (e || '').trim().toLowerCase();
+
+  // Filtrar targets por equipo — buscar en columna D (Equipo)
+  const data = tgt.filter(r => {
+    const eqCol = r['Equipo'] || r['equipo'] || r['EQUIPO'] || Object.values(r)[3] || '';
+    return normEqName(eqCol) === normEqName(equipo) && parseMoney(Object.values(r)[2] || r['Target'] || 0) > 0;
+  });
+
+  if (!data.length) return `❌ No hay targets individuales para *${equipo}*.`;
+
+  // Ingresos del mes actual por agente
   const ingByAg = {};
   ing.filter(r => r['Equipo'] === equipo && (!mes || (r['Mes'] || '').toLowerCase() === mes))
      .forEach(r => { const n = norm(r['Agente']); ingByAg[n] = (ingByAg[n] || 0) + r._v; });
@@ -233,23 +243,41 @@ async function responderTargets(equipo) {
     if (words.length >= 2) {
       const f = Object.entries(ingByAg).find(([kk]) => words.every(w => norm(kk).includes(w)));
       if (f) return f[1];
+      // Fuzzy
+      const fz = Object.entries(ingByAg).find(([kk]) => {
+        const kn = norm(kk).split(' ').filter(w => w.length > 2);
+        return kn[0] === words[0] && words.slice(1).some(w => kn.some(kw => kw.startsWith(w.slice(0,4))));
+      });
+      if (fz) return fz[1];
     }
     return 0;
   };
 
-  let msg = `${EMOJIS[equipo] || '🏢'} *${equipo} — Targets*\n`;
-  msg += `📅 _${mes || 'Todos los meses'}_\n`;
-  msg += `━━━━━━━━━━━━━━━━━━━\n`;
+  // Nombre agente = col A, Target = col C
+  let msg = `${EMOJIS[equipo] || '🏢'} *${equipo} — Targets Individuales*
+`;
+  msg += `📅 _${mes || 'Mes actual'}_
+`;
+  msg += `━━━━━━━━━━━━━━━━━━━
+`;
 
-  data.sort((a, b) => b._tgt - a._tgt).forEach(r => {
-    const real = getIng(r['Nombre']);
-    const pct = r._tgt > 0 ? Math.min(200, (real / r._tgt * 100)) : 0;
+  data.forEach(r => {
+    const nombre = r['Nombre'] || r['nombre'] || Object.values(r)[0] || '—';
+    const targetVal = parseMoney(r['Target'] || Object.values(r)[2] || 0);
+    if (targetVal <= 0) return;
+    const real = getIng(nombre);
+    const pct = Math.min(200, (real / targetVal * 100));
     const bar = progBar(pct);
     const estado = pct >= 100 ? '✅' : pct >= 60 ? '⚠️' : '🔴';
-    msg += `\n${estado} *${r['Nombre']}*\n`;
-    msg += `   Meta: ${fmt(r._tgt)}\n`;
-    msg += `   Logrado: ${fmt(real)}\n`;
-    msg += `   ${bar} ${pct.toFixed(0)}%\n`;
+    msg += `
+${estado} *${nombre}*
+`;
+    msg += `   Meta: ${fmt(targetVal)}
+`;
+    msg += `   Logrado: ${fmt(real)}
+`;
+    msg += `   ${bar} ${pct.toFixed(0)}%
+`;
   });
   return msg;
 }

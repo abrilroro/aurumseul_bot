@@ -18,7 +18,7 @@ const SHEETS = {
 };
 
 const EQUIPOS = ['Aurum House','PE','EC','CR','Corm','Orbex','Seul'];
-const EMOJIS  = {'Aurum House':'🥇','PE':'🔵','EC':'🟢','CR':'🟣','Corm':'🩵','Orbex':'🟠','Seul':'🩷'};
+const EMOJIS  = {'Aurum House':'👑','PE':'💎','EC':'🚀','CR':'💹','Corm':'⚡','Orbex':'🔥','Seul':'💰'};
 
 // ══════════════════════════════════════
 // ESTADO DE CONVERSACION
@@ -214,7 +214,9 @@ async function responderIngresos(equipo) {
 async function responderTargets(equipo) {
   const { tgt, ing } = await getData();
   const mes = getMesActual(ing);
-  const data = tgt.filter(r => r['Equipo'] === equipo && r._tgt > 0 && (!mes || (r['Mes'] || '').toLowerCase() === mes));
+  const MESES_T = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  const mesNombreT = MESES_T[new Date().getMonth()];
+  const data = tgt.filter(r => r['Equipo'] === equipo && r._tgt > 0 && (r['Mes'] || '').toLowerCase().includes(mesNombreT));
   if (!data.length) return `❌ No hay targets registrados para *${equipo}* en ${mes || 'este período'}.`;
 
   const norm = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -278,29 +280,35 @@ async function responderNomina(equipo) {
 }
 
 async function responderResumen(equipo) {
-  const { ing, nom, tgt } = await getData();
+  const { ing, nom, res } = await getData();
   const mes = getMesActual(ing);
   const ingEq = ing.filter(r => r['Equipo'] === equipo && (!mes || (r['Mes'] || '').toLowerCase() === mes));
   const nomEq = nom.filter(r => r['Equipo'] === equipo);
-  const tgtEq = tgt.filter(r => r['Equipo'] === equipo && (!mes || (r['Mes'] || '').toLowerCase() === mes));
+
+  // Sacar target e info directamente de la hoja Resumen (columna A=Equipo, B=Ingresos, C=Meta, D=%Avance, E=Alerta)
+  const normEqName = e => (e || '').trim().toLowerCase();
+  const resRow = res.find(r => normEqName(r['Equipo']) === normEqName(equipo));
+  const totalTgt = resRow ? parseMoney(resRow['Meta']) : 0;
+  const pctAvance = resRow ? parseFloat((resRow['% De avance'] || '0').replace('%','')) || 0 : 0;
+  const alerta = resRow ? (resRow['Alerta'] || '') : '';
 
   const totalIng = ingEq.reduce((a, r) => a + r._v, 0);
   const totalNom = nomEq.reduce((a, r) => a + r._tot, 0);
-  const totalTgt = tgtEq.reduce((a, r) => a + r._tgt, 0);
   const balance = totalIng - totalNom;
-  const pctTarget = totalTgt > 0 ? (totalIng / totalTgt * 100) : 0;
+  const pctTarget = totalTgt > 0 ? (totalIng / totalTgt * 100) : pctAvance;
 
   let msg = `${EMOJIS[equipo] || '🏢'} *${equipo} — Resumen General*\n`;
-  msg += `📅 _${mes || 'Todos los meses'}_\n`;
+  msg += `📅 _${mes || 'Mes actual'}_\n`;
   msg += `━━━━━━━━━━━━━━━━━━━\n`;
   msg += `💰 *Ingresos: ${fmt(totalIng)}*\n`;
   msg += `💳 Nómina: ${fmt(totalNom)}\n`;
   msg += `${balance >= 0 ? '✅' : '🔴'} Balance: *${balance >= 0 ? '+' : ''}${fmt(balance)}*\n`;
   if (totalTgt > 0) {
-    msg += `\n🎯 *Target: ${fmt(totalTgt)}*\n`;
+    msg += `\n🎯 *Target del equipo: ${fmt(totalTgt)}*\n`;
     msg += `${progBar(pctTarget)} ${pctTarget.toFixed(1)}%\n`;
     msg += `${pctTarget >= 100 ? '✅ Meta cumplida!' : pctTarget >= 60 ? '⚠️ En camino' : '🔴 Necesita atención'}\n`;
   }
+  if (alerta) msg += `\n${alerta}\n`;
   msg += `\n👥 Agentes activos: ${new Set(ingEq.map(r => r['Agente'])).size}\n`;
   msg += `📊 Transacciones: ${ingEq.length}\n`;
   return msg;

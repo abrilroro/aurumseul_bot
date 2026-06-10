@@ -1,0 +1,12 @@
+{
+  "name": "aurum-seul-bot",
+  "version": "1.0.0",
+  "description": "Bot de Telegram para Aurum Seul CRM",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -62,7 +62,15 @@ function splitLine(line) {
 }
 
 function parseMoney(s) {
-  return parseFloat((s || '').replace(/[$,\s]/g, '')) || 0;
+  if (typeof s === 'number') return s;
+  if (!s) return 0;
+  return parseFloat(String(s).replace(/[$,\s]/g, '')) || 0;
+}
+
+function parseStr(s) {
+  if (s === null || s === undefined) return '';
+  if (s instanceof Date) return s.toLocaleDateString('es-ES');
+  return String(s).trim();
 }
 
 function fmt(n) {
@@ -122,10 +130,33 @@ async function getData() {
       const map = { 'aurum house': 'Aurum House', 'pe': 'PE', 'ec': 'EC', 'cr': 'CR', 'corm': 'Corm', 'seul': 'Seul', 'orbex': 'Orbex' };
       return map[(e || '').toLowerCase().trim()] || (e || '').trim();
     };
-    ing.forEach(r => { r._v = parseMoney(r['Valor Neto']); r['Equipo'] = normEq(r['Equipo']); });
-    nom.forEach(r => { r._tot = parseMoney(r['Sueldo Total']); r._com = parseMoney(r['Comision']); r['Equipo'] = normEq(r['Equipo']); });
-    tgt.forEach(r => { r._tgt = parseMoney(r['Target']); r['Equipo'] = normEq(r['Equipo']); let m = (r['Mes'] || '').trim(); r['Mes'] = m.replace(/(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(\d{2})$/i, (_, mon, yr) => mon + ' 20' + yr); });
-    res.forEach(r => { r._ing = parseMoney(r['Ingresos mes']); r._meta = parseMoney(r['Meta']); r['Equipo'] = normEq(r['Equipo']); });
+    ing.forEach(r => {
+      r._v = parseMoney(r['Valor Neto']);
+      r['Equipo'] = normEq(parseStr(r['Equipo']));
+      r['Agente'] = parseStr(r['Agente']);
+      r['Team Leader'] = parseStr(r['Team Leader']);
+      r['Mes'] = parseStr(r['Mes']);
+      r['Fecha'] = parseStr(r['Fecha']);
+    });
+    nom.forEach(r => {
+      r._tot = parseMoney(r['Sueldo Total']);
+      r._com = parseMoney(r['Comision']);
+      r['Equipo'] = normEq(parseStr(r['Equipo']));
+      r['Nombre'] = parseStr(r['Nombre']);
+      r['Rol'] = parseStr(r['Rol']);
+    });
+    tgt.forEach(r => {
+      r._tgt = parseMoney(r['Target']);
+      r['Equipo'] = normEq(parseStr(r['Equipo']));
+      r['Nombre'] = parseStr(r['Nombre']);
+      let m = parseStr(r['Mes']);
+      r['Mes'] = m.replace(/(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(\d{2})$/i, (_, mon, yr) => mon + ' 20' + yr);
+    });
+    res.forEach(r => {
+      r._ing = parseMoney(r['Ingresos mes']);
+      r._meta = parseMoney(r['Meta']);
+      r['Equipo'] = normEq(parseStr(r['Equipo']));
+    });
     cache = { data: { ing, res, eq, nom, tgt }, ts: now };
     return cache.data;
   } catch (e) {

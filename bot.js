@@ -289,7 +289,7 @@ async function responderResumen(equipo) {
   const normEqName = e => (e || '').trim().toLowerCase();
   const resRow = res.find(r => normEqName(r['Equipo']) === normEqName(equipo));
   const totalTgt = resRow ? parseMoney(resRow['Meta']) : 0;
-  const pctAvance = resRow ? parseFloat((resRow['% De avance'] || '0').replace('%','')) || 0 : 0;
+  const pctAvance = resRow ? parseFloat(String(resRow['% De avance'] || '0').replace('%','')) || 0 : 0;
   const alerta = resRow ? (resRow['Alerta'] || '') : '';
 
   const totalIng = ingEq.reduce((a, r) => a + r._v, 0);

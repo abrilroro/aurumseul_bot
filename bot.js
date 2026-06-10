@@ -107,7 +107,10 @@ function getMesActual(data) {
   const mesActual = MESES[now.getMonth()];
   const year = now.getFullYear();
   const meses = [...new Set(data.map(r => (r['Mes'] || '').toLowerCase().trim()))].filter(Boolean);
-  return meses.find(m => m.includes(mesActual)) || meses[meses.length - 1] || '';
+  // Buscar mes que contenga el nombre del mes actual Y el año actual
+  return meses.find(m => m.includes(mesActual) && m.includes(String(year)))
+    || meses.find(m => m.includes(mesActual))
+    || meses[meses.length - 1] || '';
 }
 
 // ══════════════════════════════════════
@@ -191,7 +194,7 @@ async function responderIngresos(equipo, mesFiltro=null, mesYear=null) {
   const MESES_I = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
   const mes = mesFiltro || MESES_I[new Date().getMonth()];
   const yr = mesYear || String(new Date().getFullYear());
-  const data = ing.filter(r => r['Equipo'] === equipo && (r['Mes'] || '').toLowerCase().includes(mes) && (r['Mes'] || '').includes(yr.slice(-2)));
+  const data = ing.filter(r => r['Equipo'] === equipo && (r['Mes'] || '').toLowerCase().includes(mes));
   if (!data.length) return `❌ No hay ingresos registrados para *${equipo}* en ${mes || 'este período'}.`;
 
   const total = data.reduce((a, r) => a + r._v, 0);
@@ -354,7 +357,7 @@ async function responderDashboardTotal(mesFiltro=null, mesYear=null) {
   const yr = mesYear || String(new Date().getFullYear());
 
   // Ingresos del mes filtrado
-  const ingMes = ing.filter(r => (r['Mes'] || '').toLowerCase().includes(mes));
+  const ingMes = ing.filter(r => (r['Mes'] || '').toLowerCase().includes(mes) && (mesYear ? (r['Mes'] || '').includes(yr) : true));
   const totalIng = ingMes.reduce((a, r) => a + r._v, 0);
   const totalNom = nom.reduce((a, r) => a + r._tot, 0);
   const balance = totalIng - totalNom;

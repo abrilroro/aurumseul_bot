@@ -346,6 +346,75 @@ async function responderResumen(equipo) {
   return msg;
 }
 
+
+async function responderDashboardTotal(mesFiltro=null, mesYear=null) {
+  const { ing, nom, res } = await getData();
+  const MESES_D = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  const mes = mesFiltro || MESES_D[new Date().getMonth()];
+  const yr = mesYear || String(new Date().getFullYear());
+
+  // Ingresos del mes filtrado
+  const ingMes = ing.filter(r => (r['Mes'] || '').toLowerCase().includes(mes));
+  const totalIng = ingMes.reduce((a, r) => a + r._v, 0);
+  const totalNom = nom.reduce((a, r) => a + r._tot, 0);
+  const balance = totalIng - totalNom;
+
+  // Por equipo desde hoja Resumen
+  const resFil = res.filter(r => r['Equipo'] && parseMoney(r['Ingresos mes']) > 0);
+
+  let msg = `⚡ *Dashboard General*
+`;
+  msg += `📅 _${mes} ${yr}_
+`;
+  msg += `━━━━━━━━━━━━━━━━━━━
+`;
+  msg += `💰 *Ingresos totales: ${fmt(totalIng)}*
+`;
+  msg += `💳 Nómina total: ${fmt(totalNom)}
+`;
+  msg += `${balance >= 0 ? '✅' : '🔴'} Balance: *${balance >= 0 ? '+' : ''}${fmt(balance)}*
+`;
+  msg += `👥 Agentes activos: ${new Set(ingMes.map(r => r['Agente'])).size}
+`;
+  msg += `📊 Transacciones: ${ingMes.length}
+
+`;
+
+  msg += `🏢 *Por equipo:*
+`;
+  resFil.forEach(r => {
+    const eq = r['Equipo'];
+    const ingEq = parseMoney(r['Ingresos mes']);
+    const meta = parseMoney(r['Meta']);
+    const pct = meta > 0 ? (ingEq / meta * 100) : 0;
+    const estado = pct >= 80 ? '✅' : pct >= 40 ? '⚠️' : '🔴';
+    const emoji = EMOJIS[eq] || '🏢';
+    msg += `
+${emoji} *${eq}*
+`;
+    msg += `   💰 ${fmt(ingEq)}`;
+    if (meta > 0) msg += ` / 🎯 ${fmt(meta)} · ${pct.toFixed(0)}% ${estado}`;
+    msg += `
+`;
+  });
+
+  // Top 5 agentes
+  const byAg = {};
+  ingMes.forEach(r => { byAg[r['Agente']] = (byAg[r['Agente']] || 0) + r._v; });
+  const top5 = Object.entries(byAg).sort((a,b) => b[1]-a[1]).slice(0,5);
+  if (top5.length) {
+    msg += `
+🏆 *Top 5 agentes:*
+`;
+    top5.forEach(([name, val], i) => {
+      const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}.`;
+      msg += `${medal} ${name}: *${fmt(val)}*
+`;
+    });
+  }
+  return msg;
+}
+
 // ══════════════════════════════════════
 // TELEGRAM API
 // ══════════════════════════════════════
@@ -394,6 +463,7 @@ function sendAccionMenu(chatId, equipo) {
         [{ text: '🎯 Targets', callback_data: `acc:targets` }],
         [{ text: '💳 Nómina', callback_data: `acc:nomina` }],
         [{ text: '📊 Resumen General', callback_data: `acc:resumen` }],
+        [{ text: '⚡ Dashboard Total', callback_data: `acc:dashboard` }],
         [{ text: '📅 Cambiar mes', callback_data: `acc:mes` }],
         [{ text: '◀️ Cambiar equipo', callback_data: `acc:cambiar` }],
       ]
@@ -511,6 +581,7 @@ async function processUpdate(update) {
         else if (accion === 'targets') respuesta = await responderTargets(equipo, mesFiltro, mesYearFiltro);
         else if (accion === 'nomina') respuesta = await responderNomina(equipo, mesFiltro);
         else if (accion === 'resumen') respuesta = await responderResumen(equipo, mesFiltro);
+        else if (accion === 'dashboard') respuesta = await responderDashboardTotal(mesFiltro, mesYearFiltro);
       } catch (e) {
         respuesta = '❌ Error al obtener datos. Intenta de nuevo.';
         console.error(e);

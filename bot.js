@@ -1,603 +1,407 @@
 const https = require('https');
 const http = require('http');
+const fs = require('fs');
 
 // ══════════════════════════════════════
 // CONFIG
 // ══════════════════════════════════════
 const TOKEN = process.env.BOT_TOKEN || '8868834232:AAFS63UfIOVVqWv9IT3tlg3bKL5xUokoxHY';
 const API = `https://api.telegram.org/bot${TOKEN}`;
-
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby0RIPOqvAKS-4dKMGo90-0s0XOUNp2vysGDdqCdXHDIRRKE-aDI7XE3rQ6FSFoOtkF/exec';
+const ACCESS_KEY = 'Claveincorrecta20!';
+
 const SHEETS = {
   ingresos:  SCRIPT_URL + '?sheet=Ingresos',
   resumen:   SCRIPT_URL + '?sheet=Resumen',
   equipo:    SCRIPT_URL + '?sheet=Equipo',
   nomina:    SCRIPT_URL + '?sheet=Nomina',
   targets:   SCRIPT_URL + '?sheet=Targets',
-  dashboard: SCRIPT_URL + '?sheet=Dashboard',
 };
 
 const EQUIPOS = ['Aurum House','PE','EC','CR','Corm','Orbex','Seul'];
 const EMOJIS  = {'Aurum House':'👑','PE':'💎','EC':'🚀','CR':'💹','Corm':'⚡','Orbex':'🔥','Seul':'💰'};
+const MESES   = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
 // ══════════════════════════════════════
-// ESTADO DE CONVERSACION
+// AUTH
 // ══════════════════════════════════════
-const userState = {}; // { chatId: { equipo, step } }
-const ACCESS_KEY = 'Claveincorrecta20!';
-const fs = require('fs');
 const AUTH_FILE = '/tmp/aurum_auth.json';
-
-// Load authenticated users from file
 let authorizedUsers = new Set();
-try {
-  const data = fs.readFileSync(AUTH_FILE, 'utf8');
-  authorizedUsers = new Set(JSON.parse(data));
-  console.log('Loaded', authorizedUsers.size, 'authorized users');
-} catch(e) { authorizedUsers = new Set(); }
+try { authorizedUsers = new Set(JSON.parse(fs.readFileSync(AUTH_FILE,'utf8'))); } catch(e) {}
+function saveAuth(){ try{ fs.writeFileSync(AUTH_FILE, JSON.stringify([...authorizedUsers])); }catch(e){} }
+function isAuth(id){ return authorizedUsers.has(String(id)); }
+function addAuth(id){ authorizedUsers.add(String(id)); saveAuth(); }
 
-function saveAuth() {
-  try { fs.writeFileSync(AUTH_FILE, JSON.stringify([...authorizedUsers])); } catch(e) {}
-}
+// ══════════════════════════════════════
+// STATE
+// ══════════════════════════════════════
+const userState = {};
 
-function isAuth(chatId) { return authorizedUsers.has(String(chatId)); }
-function addAuth(chatId) { authorizedUsers.add(String(chatId)); saveAuth(); }
+// ══════════════════════════════════════
+// CACHE
+// ══════════════════════════════════════
+let cache = { data: null, ts: 0 };
 
 // ══════════════════════════════════════
 // HELPERS
 // ══════════════════════════════════════
-function fetchUrl(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => resolve(data));
-    }).on('error', reject);
-  });
+function parseMoney(s){
+  if(typeof s === 'number') return s;
+  if(!s) return 0;
+  return parseFloat(String(s).replace(/[$,\s]/g,''))||0;
 }
-
-function parseCSV(text) {
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
-  if (!lines.length) return [];
-  const headers = splitLine(lines[0]);
-  return lines.slice(1).map(line => {
-    const cols = splitLine(line);
-    const obj = {};
-    headers.forEach((h, i) => obj[h.trim()] = (cols[i] || '').trim());
-    return obj;
-  }).filter(r => Object.values(r).some(v => v));
-}
-
-function splitLine(line) {
-  const cols = []; let cur = '', inQ = false;
-  for (const c of line) {
-    if (c === '"') { inQ = !inQ; }
-    else if (c === ',' && !inQ) { cols.push(cur); cur = ''; }
-    else cur += c;
-  }
-  cols.push(cur);
-  return cols;
-}
-
-function parseMoney(s) {
-  if (typeof s === 'number') return s;
-  if (!s) return 0;
-  return parseFloat(String(s).replace(/[$,\s]/g, '')) || 0;
-}
-
-function parseStr(s) {
-  if (s === null || s === undefined) return '';
-  if (s instanceof Date) return s.toLocaleDateString('es-ES');
+function parseStr(s){
+  if(s===null||s===undefined) return '';
+  if(s instanceof Date) return s.toLocaleDateString('es-ES');
   return String(s).trim();
 }
-
-function fmt(n) {
-  if (isNaN(n)) return '$0.00';
-  return '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function fmt(n){
+  if(isNaN(n)) return '$0.00';
+  const abs = Math.abs(n);
+  const str = '$'+abs.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  return n<0?'-'+str:str;
 }
-
-function progBar(pct, len = 10) {
-  const filled = Math.round(Math.min(pct, 100) / 100 * len);
-  return '█'.repeat(filled) + '░'.repeat(len - filled);
+function progBar(pct,len=10){
+  const f=Math.round(Math.min(pct,100)/100*len);
+  return '█'.repeat(f)+'░'.repeat(len-f);
 }
-
-function getMesActual(data) {
-  const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-  const now = new Date();
-  const mesActual = MESES[now.getMonth()];
-  const year = now.getFullYear();
-  const meses = [...new Set(data.map(r => (r['Mes'] || '').toLowerCase().trim()))].filter(Boolean);
-  // Buscar mes que contenga el nombre del mes actual Y el año actual
-  return meses.find(m => m.includes(mesActual) && m.includes(String(year)))
-    || meses.find(m => m.includes(mesActual))
-    || meses[meses.length - 1] || '';
+function norm(s){ return (s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim(); }
+function normEq(e){
+  const map={'aurum house':'Aurum House','pe':'PE','ec':'EC','cr':'CR','corm':'Corm','seul':'Seul','orbex':'Orbex'};
+  return map[(e||'').toLowerCase().trim()]||(e||'').trim();
+}
+function getMesActual(data){
+  const mesNombre = MESES[new Date().getMonth()];
+  const year = String(new Date().getFullYear());
+  const meses = [...new Set(data.map(r=>(r['Mes']||'').toLowerCase().trim()))].filter(Boolean);
+  return meses.find(m=>m.includes(mesNombre)&&m.includes(year))
+    ||meses.find(m=>m.includes(mesNombre))
+    ||meses[meses.length-1]||mesNombre+' '+year;
 }
 
 // ══════════════════════════════════════
-// FETCH SHEETS
+// FETCH
 // ══════════════════════════════════════
-let cache = { data: null, ts: 0 };
-
-async function fetchJSON(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
-      // Follow redirects
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+async function fetchJSON(url){
+  return new Promise((resolve,reject)=>{
+    https.get(url,(res)=>{
+      if(res.statusCode>=300&&res.statusCode<400&&res.headers.location)
         return fetchJSON(res.headers.location).then(resolve).catch(reject);
-      }
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch(e) { resolve([]); }
-      });
-    }).on('error', reject);
+      let data='';
+      res.on('data',c=>data+=c);
+      res.on('end',()=>{ try{resolve(JSON.parse(data));}catch(e){resolve([]);} });
+    }).on('error',reject);
   });
 }
 
-async function getData() {
-  const now = Date.now();
-  if (cache.data && now - cache.ts < 5 * 60 * 1000) return cache.data;
-  try {
-    const [ing, res, eq, nom, tgt] = await Promise.all([
+async function getData(){
+  const now=Date.now();
+  if(cache.data&&now-cache.ts<5*60*1000) return cache.data;
+  try{
+    const [ing,res,eq,nom,tgt]=await Promise.all([
       fetchJSON(SHEETS.ingresos),
       fetchJSON(SHEETS.resumen),
       fetchJSON(SHEETS.equipo),
       fetchJSON(SHEETS.nomina),
       fetchJSON(SHEETS.targets),
     ]);
-    // Normalizar
-    const normEq = e => {
-      const map = { 'aurum house': 'Aurum House', 'pe': 'PE', 'ec': 'EC', 'cr': 'CR', 'corm': 'Corm', 'seul': 'Seul', 'orbex': 'Orbex' };
-      return map[(e || '').toLowerCase().trim()] || (e || '').trim();
-    };
-    ing.forEach(r => {
-      r._v = parseMoney(r['Valor Neto']);
-      r['Equipo'] = normEq(parseStr(r['Equipo']));
-      r['Agente'] = parseStr(r['Agente']);
-      r['Team Leader'] = parseStr(r['Team Leader']);
-      r['Mes'] = parseStr(r['Mes']);
-      r['Fecha'] = parseStr(r['Fecha']);
+    ing.forEach(r=>{
+      r._v=parseMoney(r['Valor Neto']);
+      r['Equipo']=normEq(parseStr(r['Equipo']));
+      r['Agente']=parseStr(r['Agente']);
+      r['Team Leader']=parseStr(r['Team Leader']);
+      r['Mes']=parseStr(r['Mes']);
     });
-    nom.forEach(r => {
-      r._tot = parseMoney(r['Sueldo Total']);
-      r._com = parseMoney(r['Comision']);
-      r['Equipo'] = normEq(parseStr(r['Equipo']));
-      r['Nombre'] = parseStr(r['Nombre']);
-      r['Rol'] = parseStr(r['Rol']);
+    nom.forEach(r=>{
+      r._tot=parseMoney(r['Sueldo Total']);
+      r._com=parseMoney(r['Comision']);
+      r['Equipo']=normEq(parseStr(r['Equipo']));
+      r['Nombre']=parseStr(r['Nombre']);
+      r['Rol']=parseStr(r['Rol']);
     });
-    tgt.forEach(r => {
-      r._tgt = parseMoney(r['Target']);
-      r['Equipo'] = normEq(parseStr(r['Equipo']));
-      r['Nombre'] = parseStr(r['Nombre']);
-      let m = parseStr(r['Mes']);
-      r['Mes'] = m.replace(/(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(\d{2})$/i, (_, mon, yr) => mon + ' 20' + yr);
+    tgt.forEach(r=>{
+      r._tgt=parseMoney(r['Target']);
+      r['Equipo']=normEq(parseStr(r['Equipo']));
+      r['Nombre']=parseStr(r['Nombre']);
+      let m=parseStr(r['Mes']);
+      r['Mes']=m.replace(/(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(\d{2})$/i,(_,mon,yr)=>mon+' 20'+yr);
     });
-    res.forEach(r => {
-      r._ing = parseMoney(r['Ingresos mes']);
-      r._meta = parseMoney(r['Meta']);
-      r['Equipo'] = normEq(parseStr(r['Equipo']));
+    res.forEach(r=>{
+      r._ing=parseMoney(r['Ingresos mes']);
+      r._meta=parseMoney(r['Meta']);
+      r['Equipo']=normEq(parseStr(r['Equipo']));
     });
-    cache = { data: { ing, res, eq, nom, tgt }, ts: now };
+    cache={data:{ing,res,eq,nom,tgt},ts:now};
     return cache.data;
-  } catch (e) {
-    console.error('Error fetching data:', e.message);
-    return cache.data || null;
+  }catch(e){
+    console.error('Error fetching:',e.message);
+    return cache.data||{ing:[],res:[],eq:[],nom:[],tgt:[]};
   }
 }
 
 // ══════════════════════════════════════
-// RESPUESTAS DEL BOT
+// MENUS
 // ══════════════════════════════════════
-async function responderIngresos(equipo, mesFiltro=null, mesYear=null) {
-  const { ing } = await getData();
-  const MESES_I = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-  const mes = mesFiltro || MESES_I[new Date().getMonth()];
-  const yr = mesYear || String(new Date().getFullYear());
-  const data = ing.filter(r => r['Equipo'] === equipo && (r['Mes'] || '').toLowerCase().includes(mes));
-  if (!data.length) return `❌ No hay ingresos registrados para *${equipo}* en ${mes || 'este período'}.`;
+function getMesLabel(state){
+  if(state&&state.mes) return `${state.mes} ${state.mesYear||new Date().getFullYear()}`;
+  return `${MESES[new Date().getMonth()]} ${new Date().getFullYear()}`;
+}
 
-  const total = data.reduce((a, r) => a + r._v, 0);
-  const byAg = {};
-  data.forEach(r => { byAg[r['Agente']] = (byAg[r['Agente']] || 0) + r._v; });
-  const ranking = Object.entries(byAg).sort((a, b) => b[1] - a[1]);
+async function sendMainMenu(chatId){
+  const mesLabel = getMesLabel(userState[chatId]);
+  const buttons = EQUIPOS.map(eq=>[{text:`${EMOJIS[eq]} ${eq}`,callback_data:`eq:${eq}`}]);
+  buttons.push([{text:`⚡ Dashboard Total`,callback_data:`acc:dashboard`}]);
+  buttons.push([{text:`📅 Cambiar mes (${mesLabel})`,callback_data:`main:mes`}]);
+  return sendMessage(chatId,'🏢 *Selecciona un equipo o acción:*',{reply_markup:{inline_keyboard:buttons}});
+}
 
-  let msg = `${EMOJIS[equipo] || '🏢'} *${equipo} — Ingresos*\n`;
-  msg += `📅 _${mes || 'Todos los meses'}_\n`;
-  msg += `━━━━━━━━━━━━━━━━━━━\n`;
-  msg += `💰 *Total: ${fmt(total)}*\n`;
-  msg += `📊 Transacciones: ${data.length}\n`;
-  msg += `📈 Promedio: ${fmt(total / data.length)}\n\n`;
-  msg += `🏆 *Ranking de agentes:*\n`;
-  ranking.forEach(([name, val], i) => {
-    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
-    msg += `${medal} ${name}: *${fmt(val)}*\n`;
+async function sendAccionMenu(chatId,equipo){
+  const mesLabel = getMesLabel(userState[chatId]);
+  return sendMessage(chatId,`${EMOJIS[equipo]||'🏢'} *${equipo}*\n📅 _${mesLabel}_\n\n¿Qué información quieres ver?`,{
+    reply_markup:{inline_keyboard:[
+      [{text:'💰 Ingresos',callback_data:'acc:ingresos'}],
+      [{text:'🎯 Targets',callback_data:'acc:targets'}],
+      [{text:'💳 Nómina',callback_data:'acc:nomina'}],
+      [{text:'📊 Resumen General',callback_data:'acc:resumen'}],
+      [{text:'◀️ Volver',callback_data:'main:back'}],
+    ]}
+  });
+}
+
+async function sendMesMenu(chatId,returnTo){
+  const year=new Date().getFullYear();
+  const mesActual=new Date().getMonth();
+  const buttons=[];
+  for(let i=0;i<=5;i++){
+    let idx=mesActual-i; let yr=year;
+    if(idx<0){idx+=12;yr--;}
+    buttons.push([{text:`📅 ${MESES[idx]} ${yr}`,callback_data:`mes:${MESES[idx]}:${yr}:${returnTo}`}]);
+  }
+  buttons.push([{text:'◀️ Volver',callback_data:`main:back`}]);
+  return sendMessage(chatId,'📅 *Selecciona el mes:*',{reply_markup:{inline_keyboard:buttons}});
+}
+
+// ══════════════════════════════════════
+// RESPUESTAS
+// ══════════════════════════════════════
+function getMesFiltro(state){
+  return state&&state.mes ? state.mes : MESES[new Date().getMonth()];
+}
+
+async function responderIngresos(equipo,state){
+  const {ing}=await getData();
+  const mes=getMesFiltro(state);
+  const data=ing.filter(r=>r['Equipo']===equipo&&(r['Mes']||'').toLowerCase().includes(mes));
+  if(!data.length) return `❌ No hay ingresos para *${equipo}* en ${mes}.`;
+  const total=data.reduce((a,r)=>a+r._v,0);
+  const byAg={};
+  data.forEach(r=>{byAg[r['Agente']]=(byAg[r['Agente']]||0)+r._v;});
+  const ranking=Object.entries(byAg).sort((a,b)=>b[1]-a[1]);
+  let msg=`${EMOJIS[equipo]||'🏢'} *${equipo} — Ingresos*\n📅 _${mes}_\n━━━━━━━━━━━━━━━━━━━\n`;
+  msg+=`💰 *Total: ${fmt(total)}*\n📊 Transacciones: ${data.length}\n📈 Promedio: ${fmt(total/data.length)}\n\n🏆 *Ranking:*\n`;
+  ranking.forEach(([name,val],i)=>{
+    const medal=i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}.`;
+    msg+=`${medal} ${name}: *${fmt(val)}*\n`;
   });
   return msg;
 }
 
-async function responderTargets(equipo, mesFiltro=null, mesYear=null) {
-  const { tgt, ing } = await getData();
-  const MESES_TT = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-  const mes = mesFiltro || MESES_TT[new Date().getMonth()];
-  const yr = mesYear || String(new Date().getFullYear());
-  const MESES_T = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-  const mesNombreT = MESES_T[new Date().getMonth()];
-
-  // Columna A = Nombre agente, C = Target, D = Equipo
-  const norm = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
-  const normEqName = e => (e || '').trim().toLowerCase();
-
-  // Filtrar targets por equipo — buscar en columna D (Equipo)
-  const data = tgt.filter(r => {
-    const eqCol = r['Equipo'] || r['equipo'] || r['EQUIPO'] || Object.values(r)[3] || '';
-    return normEqName(eqCol) === normEqName(equipo) && parseMoney(Object.values(r)[2] || r['Target'] || 0) > 0;
-  });
-
-  if (!data.length) return `❌ No hay targets individuales para *${equipo}*.`;
-
-  // Ingresos del mes actual por agente
-  const ingByAg = {};
-  ing.filter(r => r['Equipo'] === equipo && (r['Mes'] || '').toLowerCase().includes(mes))
-     .forEach(r => { const n = norm(r['Agente']); ingByAg[n] = (ingByAg[n] || 0) + r._v; });
-
-  const getIng = name => {
-    const k = norm(name);
-    if (ingByAg[k] !== undefined) return ingByAg[k];
-    const ex = Object.entries(ingByAg).find(([kk]) => norm(kk) === k);
-    if (ex) return ex[1];
-    const words = k.split(' ').filter(w => w.length > 2);
-    if (words.length >= 2) {
-      const f = Object.entries(ingByAg).find(([kk]) => words.every(w => norm(kk).includes(w)));
-      if (f) return f[1];
-      // Fuzzy
-      const fz = Object.entries(ingByAg).find(([kk]) => {
-        const kn = norm(kk).split(' ').filter(w => w.length > 2);
-        return kn[0] === words[0] && words.slice(1).some(w => kn.some(kw => kw.startsWith(w.slice(0,4))));
+async function responderTargets(equipo,state){
+  const {tgt,ing}=await getData();
+  const mes=getMesFiltro(state);
+  const data=tgt.filter(r=>norm(r['Equipo'])===norm(equipo)&&(r['Mes']||'').toLowerCase().includes(mes)&&r._tgt>0);
+  if(!data.length) return `❌ No hay targets para *${equipo}* en ${mes}.`;
+  const ingByAg={};
+  ing.filter(r=>r['Equipo']===equipo&&(r['Mes']||'').toLowerCase().includes(mes))
+     .forEach(r=>{const n=norm(r['Agente']);ingByAg[n]=(ingByAg[n]||0)+r._v;});
+  const getIng=name=>{
+    const k=norm(name);
+    if(ingByAg[k]!==undefined) return ingByAg[k];
+    const ex=Object.entries(ingByAg).find(([kk])=>norm(kk)===k);
+    if(ex) return ex[1];
+    const words=k.split(' ').filter(w=>w.length>2);
+    if(words.length>=2){
+      const f=Object.entries(ingByAg).find(([kk])=>words.every(w=>norm(kk).includes(w)));
+      if(f) return f[1];
+      const fz=Object.entries(ingByAg).find(([kk])=>{
+        const kn=norm(kk).split(' ').filter(w=>w.length>2);
+        return kn[0]===words[0]&&words.slice(1).some(w=>kn.some(kw=>kw.startsWith(w.slice(0,4))));
       });
-      if (fz) return fz[1];
+      if(fz) return fz[1];
     }
     return 0;
   };
-
-  // Nombre agente = col A, Target = col C
-  let msg = `${EMOJIS[equipo] || '🏢'} *${equipo} — Targets Individuales*
-`;
-  msg += `📅 _${mes || 'Mes actual'}_
-`;
-  msg += `━━━━━━━━━━━━━━━━━━━
-`;
-
-  data.forEach(r => {
-    const nombre = r['Nombre'] || r['nombre'] || Object.values(r)[0] || '—';
-    const targetVal = parseMoney(r['Target'] || Object.values(r)[2] || 0);
-    if (targetVal <= 0) return;
-    const real = getIng(nombre);
-    const pct = Math.min(200, (real / targetVal * 100));
-    const bar = progBar(pct);
-    const estado = pct >= 100 ? '✅' : pct >= 60 ? '⚠️' : '🔴';
-    msg += `
-${estado} *${nombre}*
-`;
-    msg += `   Meta: ${fmt(targetVal)}
-`;
-    msg += `   Logrado: ${fmt(real)}
-`;
-    msg += `   ${bar} ${pct.toFixed(0)}%
-`;
+  let msg=`${EMOJIS[equipo]||'🏢'} *${equipo} — Targets*\n📅 _${mes}_\n━━━━━━━━━━━━━━━━━━━\n`;
+  data.forEach(r=>{
+    const real=getIng(r['Nombre']);
+    const pct=Math.min(200,real/r._tgt*100);
+    const estado=pct>=100?'✅':pct>=60?'⚠️':'🔴';
+    msg+=`\n${estado} *${r['Nombre']}*\n   Meta: ${fmt(r._tgt)}\n   Logrado: ${fmt(real)}\n   ${progBar(pct)} ${pct.toFixed(0)}%\n`;
   });
   return msg;
 }
 
-async function responderNomina(equipo) {
-  const { nom, ing } = await getData();
-  const data = nom.filter(r => r['Equipo'] === equipo && r['Nombre']);
-  if (!data.length) return `❌ No hay datos de nómina para *${equipo}*.`;
-
-  const totalNom = data.reduce((a, r) => a + r._tot, 0);
-  const totalIng = ing.filter(r => r['Equipo'] === equipo).reduce((a, r) => a + r._v, 0);
-  const balance = totalIng - totalNom;
-
-  let msg = `${EMOJIS[equipo] || '🏢'} *${equipo} — Nómina*\n`;
-  msg += `━━━━━━━━━━━━━━━━━━━\n`;
-  msg += `💳 *Total nómina: ${fmt(totalNom)}*\n`;
-  msg += `💰 Ingresos equipo: ${fmt(totalIng)}\n`;
-  msg += `${balance >= 0 ? '✅' : '🔴'} Balance: *${balance >= 0 ? '+' : ''}${fmt(balance)}*\n\n`;
-  msg += `👥 *Detalle por persona:*\n`;
-
-  data.sort((a, b) => b._tot - a._tot).forEach(r => {
-    msg += `\n👤 *${r['Nombre']}*\n`;
-    msg += `   Rol: ${r['Rol'] || '—'}\n`;
-    msg += `   Sueldo: ${fmt(r._tot)}\n`;
-    if (r._com > 0) msg += `   Comisión: ${fmt(r._com)}\n`;
+async function responderNomina(equipo,state){
+  const {nom,ing}=await getData();
+  const mes=getMesFiltro(state);
+  const data=nom.filter(r=>r['Equipo']===equipo&&r['Nombre']);
+  if(!data.length) return `❌ No hay datos de nómina para *${equipo}*.`;
+  const totalNom=data.reduce((a,r)=>a+r._tot,0);
+  const totalIng=ing.filter(r=>r['Equipo']===equipo&&(r['Mes']||'').toLowerCase().includes(mes)).reduce((a,r)=>a+r._v,0);
+  const balance=totalIng-totalNom;
+  let msg=`${EMOJIS[equipo]||'🏢'} *${equipo} — Nómina*\n━━━━━━━━━━━━━━━━━━━\n`;
+  msg+=`💳 *Total nómina: ${fmt(totalNom)}*\n💰 Ingresos: ${fmt(totalIng)}\n${balance>=0?'✅':'🔴'} Balance: *${balance>=0?'+':''}${fmt(balance)}*\n\n👥 *Detalle:*\n`;
+  data.sort((a,b)=>b._tot-a._tot).forEach(r=>{
+    msg+=`\n👤 *${r['Nombre']}*\n   Rol: ${r['Rol']||'—'}\n   Sueldo: ${fmt(r._tot)}\n`;
+    if(r._com>0) msg+=`   Comisión: ${fmt(r._com)}\n`;
   });
   return msg;
 }
 
-async function responderResumen(equipo) {
-  const { ing, nom, res } = await getData();
-  const mes = getMesActual(ing);
-  const ingEq = ing.filter(r => r['Equipo'] === equipo && (!mes || (r['Mes'] || '').toLowerCase() === mes));
-  const nomEq = nom.filter(r => r['Equipo'] === equipo);
-
-  // Sacar target e info directamente de la hoja Resumen (columna A=Equipo, B=Ingresos, C=Meta, D=%Avance, E=Alerta)
-  const normEqName = e => (e || '').trim().toLowerCase();
-  const resRow = res.find(r => normEqName(r['Equipo']) === normEqName(equipo));
-  const totalTgt = resRow ? parseMoney(resRow['Meta']) : 0;
-  const pctAvance = resRow ? parseFloat(String(resRow['% De avance'] || '0').replace('%','')) || 0 : 0;
-  const alerta = resRow ? (resRow['Alerta'] || '') : '';
-
-  const totalIng = ingEq.reduce((a, r) => a + r._v, 0);
-  const totalNom = nomEq.reduce((a, r) => a + r._tot, 0);
-  const balance = totalIng - totalNom;
-  const pctTarget = totalTgt > 0 ? (totalIng / totalTgt * 100) : pctAvance;
-
-  let msg = `${EMOJIS[equipo] || '🏢'} *${equipo} — Resumen General*\n`;
-  msg += `📅 _${mes || 'Mes actual'}_\n`;
-  msg += `━━━━━━━━━━━━━━━━━━━\n`;
-  msg += `💰 *Ingresos: ${fmt(totalIng)}*\n`;
-  msg += `💳 Nómina: ${fmt(totalNom)}\n`;
-  msg += `${balance >= 0 ? '✅' : '🔴'} Balance: *${balance >= 0 ? '+' : ''}${fmt(balance)}*\n`;
-  if (totalTgt > 0) {
-    msg += `\n🎯 *Target del equipo: ${fmt(totalTgt)}*\n`;
-    msg += `${progBar(pctTarget)} ${pctTarget.toFixed(1)}%\n`;
-    msg += `${pctTarget >= 100 ? '✅ Meta cumplida!' : pctTarget >= 60 ? '⚠️ En camino' : '🔴 Necesita atención'}\n`;
+async function responderResumen(equipo,state){
+  const {ing,nom,res}=await getData();
+  const mes=getMesFiltro(state);
+  const ingEq=ing.filter(r=>r['Equipo']===equipo&&(r['Mes']||'').toLowerCase().includes(mes));
+  const nomEq=nom.filter(r=>r['Equipo']===equipo);
+  const resRow=res.find(r=>norm(r['Equipo'])===norm(equipo));
+  const totalIng=ingEq.reduce((a,r)=>a+r._v,0);
+  const totalNom=nomEq.reduce((a,r)=>a+r._tot,0);
+  const balance=totalIng-totalNom;
+  const meta=resRow?resRow._meta:0;
+  const pct=meta>0?(totalIng/meta*100):0;
+  let msg=`${EMOJIS[equipo]||'🏢'} *${equipo} — Resumen*\n📅 _${mes}_\n━━━━━━━━━━━━━━━━━━━\n`;
+  msg+=`💰 *Ingresos: ${fmt(totalIng)}*\n💳 Nómina: ${fmt(totalNom)}\n${balance>=0?'✅':'🔴'} Balance: *${balance>=0?'+':''}${fmt(balance)}*\n`;
+  if(meta>0){
+    msg+=`\n🎯 *Target: ${fmt(meta)}*\n${progBar(pct)} ${pct.toFixed(1)}%\n`;
+    msg+=pct>=100?'✅ Meta cumplida!':pct>=60?'⚠️ En camino':'🔴 Necesita atención';
+    msg+='\n';
   }
-  if (alerta) msg += `\n${alerta}\n`;
-  msg += `\n👥 Agentes activos: ${new Set(ingEq.map(r => r['Agente'])).size}\n`;
-  msg += `📊 Transacciones: ${ingEq.length}\n`;
+  if(resRow&&resRow['Alerta']) msg+=`\n${resRow['Alerta']}\n`;
+  msg+=`\n👥 Agentes: ${new Set(ingEq.map(r=>r['Agente'])).size} · 📊 ${ingEq.length} transacciones\n`;
   return msg;
 }
 
-
-async function responderDashboardTotal(mesFiltro=null, mesYear=null) {
-  const { ing, nom, res } = await getData();
-  const MESES_D = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-  const mes = mesFiltro || MESES_D[new Date().getMonth()];
-  const yr = mesYear || String(new Date().getFullYear());
-
-  // Ingresos del mes filtrado
-  const ingMes = ing.filter(r => (r['Mes'] || '').toLowerCase().includes(mes) && (mesYear ? (r['Mes'] || '').includes(yr) : true));
-  const totalIng = ingMes.reduce((a, r) => a + r._v, 0);
-  const totalNom = nom.reduce((a, r) => a + r._tot, 0);
-  const balance = totalIng - totalNom;
-
-  // Por equipo desde hoja Resumen
-  const resFil = res.filter(r => r['Equipo'] && parseMoney(r['Ingresos mes']) > 0);
-
-  let msg = `⚡ *Dashboard General*
-`;
-  msg += `📅 _${mes} ${yr}_
-`;
-  msg += `━━━━━━━━━━━━━━━━━━━
-`;
-  msg += `💰 *Ingresos totales: ${fmt(totalIng)}*
-`;
-  msg += `💳 Nómina total: ${fmt(totalNom)}
-`;
-  msg += `${balance >= 0 ? '✅' : '🔴'} Balance: *${balance >= 0 ? '+' : ''}${fmt(balance)}*
-`;
-  msg += `👥 Agentes activos: ${new Set(ingMes.map(r => r['Agente'])).size}
-`;
-  msg += `📊 Transacciones: ${ingMes.length}
-
-`;
-
-  msg += `🏢 *Por equipo:*
-`;
-  resFil.forEach(r => {
-    const eq = r['Equipo'];
-    const ingEq = parseMoney(r['Ingresos mes']);
-    const meta = parseMoney(r['Meta']);
-    const pct = meta > 0 ? (ingEq / meta * 100) : 0;
-    const estado = pct >= 80 ? '✅' : pct >= 40 ? '⚠️' : '🔴';
-    const emoji = EMOJIS[eq] || '🏢';
-    msg += `
-${emoji} *${eq}*
-`;
-    msg += `   💰 ${fmt(ingEq)}`;
-    if (meta > 0) msg += ` / 🎯 ${fmt(meta)} · ${pct.toFixed(0)}% ${estado}`;
-    msg += `
-`;
-  });
-
-  // Top 5 agentes
-  const byAg = {};
-  ingMes.forEach(r => { byAg[r['Agente']] = (byAg[r['Agente']] || 0) + r._v; });
-  const top5 = Object.entries(byAg).sort((a,b) => b[1]-a[1]).slice(0,5);
-  if (top5.length) {
-    msg += `
-🏆 *Top 5 agentes:*
-`;
-    top5.forEach(([name, val], i) => {
-      const medal = i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}.`;
-      msg += `${medal} ${name}: *${fmt(val)}*
-`;
-    });
-  }
+async function responderDashboard(state){
+  const {ing,nom}=await getData();
+  const mes=getMesFiltro(state);
+  const ingMes=ing.filter(r=>(r['Mes']||'').toLowerCase().includes(mes));
+  const totalIng=ingMes.reduce((a,r)=>a+r._v,0);
+  const totalNom=nom.reduce((a,r)=>a+r._tot,0);
+  const balance=totalIng-totalNom;
+  let msg=`⚡ *Dashboard General*\n📅 _${mes}_\n━━━━━━━━━━━━━━━━━━━\n`;
+  msg+=`💰 *Total Ingresos: ${fmt(totalIng)}*\n`;
+  msg+=`💳 *Total Nómina: ${fmt(totalNom)}*\n`;
+  msg+=`${balance>=0?'✅':'🔴'} *Balance: ${balance>=0?'+':''}${fmt(balance)}*\n`;
   return msg;
 }
 
 // ══════════════════════════════════════
 // TELEGRAM API
 // ══════════════════════════════════════
-function tgRequest(method, body) {
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify(body);
-    const options = {
-      hostname: 'api.telegram.org',
-      path: `/bot${TOKEN}/${method}`,
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) }
-    };
-    const req = https.request(options, res => {
-      let d = '';
-      res.on('data', c => d += c);
-      res.on('end', () => resolve(JSON.parse(d)));
-    });
-    req.on('error', reject);
-    req.write(data);
-    req.end();
+function tgRequest(method,body){
+  return new Promise((resolve,reject)=>{
+    const data=JSON.stringify(body);
+    const options={hostname:'api.telegram.org',path:`/bot${TOKEN}/${method}`,method:'POST',headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(data)}};
+    const req=https.request(options,res=>{let d='';res.on('data',c=>d+=c);res.on('end',()=>resolve(JSON.parse(d)));});
+    req.on('error',reject);req.write(data);req.end();
   });
 }
-
-function sendMessage(chatId, text, extra = {}) {
-  return tgRequest('sendMessage', { chat_id: chatId, text, parse_mode: 'Markdown', ...extra });
-}
-
-function sendEquipoMenu(chatId) {
-  const buttons = EQUIPOS.map(eq => [{ text: `${EMOJIS[eq] || '🏢'} ${eq}`, callback_data: `eq:${eq}` }]);
-  return sendMessage(chatId, '🏢 *Selecciona un equipo:*', {
-    reply_markup: { inline_keyboard: buttons }
-  });
-}
-
-function sendAccionMenu(chatId, equipo) {
-  const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-  const mesActual = MESES[new Date().getMonth()] + ' ' + new Date().getFullYear();
-  return sendMessage(chatId, `${EMOJIS[equipo] || '🏢'} *${equipo}*
-
-📅 Mes: _${mesActual}_
-
-¿Qué información quieres ver?`, {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '💰 Ingresos', callback_data: `acc:ingresos` }],
-        [{ text: '🎯 Targets', callback_data: `acc:targets` }],
-        [{ text: '💳 Nómina', callback_data: `acc:nomina` }],
-        [{ text: '📊 Resumen General', callback_data: `acc:resumen` }],
-        [{ text: '⚡ Dashboard Total', callback_data: `acc:dashboard` }],
-        [{ text: '📅 Cambiar mes', callback_data: `acc:mes` }],
-        [{ text: '◀️ Cambiar equipo', callback_data: `acc:cambiar` }],
-      ]
-    }
-  });
-}
-
-function sendMesMenu(chatId, equipo) {
-  const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-  const year = new Date().getFullYear();
-  const mesActual = new Date().getMonth();
-  const buttons = [];
-  for (let i = 0; i <= 5; i++) {
-    let idx = mesActual - i;
-    let yr = year;
-    if (idx < 0) { idx += 12; yr--; }
-    buttons.push([{ text: `📅 ${MESES[idx]} ${yr}`, callback_data: `mes:${MESES[idx]}:${yr}` }]);
-  }
-  buttons.push([{ text: '◀️ Volver', callback_data: `eq:${equipo}` }]);
-  return sendMessage(chatId, '📅 *Selecciona el mes:*', { reply_markup: { inline_keyboard: buttons } });
+function sendMessage(chatId,text,extra={}){
+  return tgRequest('sendMessage',{chat_id:chatId,text,parse_mode:'Markdown',...extra});
 }
 
 // ══════════════════════════════════════
-// PROCESAR UPDATES
+// PROCESS UPDATES
 // ══════════════════════════════════════
-async function processUpdate(update) {
-  // Mensajes de texto
-  if (update.message) {
-    const chatId = update.message.chat.id;
-    const text = (update.message.text || '').trim();
+async function processUpdate(update){
+  if(update.message){
+    const chatId=update.message.chat.id;
+    const text=(update.message.text||'').trim();
 
-    // Check if waiting for password
-    if (userState[chatId] && userState[chatId].waitingAuth) {
-      if (text === ACCESS_KEY) {
+    // Waiting for password
+    if(userState[chatId]&&userState[chatId].waitingAuth){
+      if(text===ACCESS_KEY){
         addAuth(chatId);
-        userState[chatId] = {};
-        await sendMessage(chatId, '✅ *Acceso concedido!*\n\nBienvenido al bot de Aurum Seul.');
-        await sendEquipoMenu(chatId);
+        userState[chatId]={};
+        await sendMessage(chatId,'✅ *Acceso concedido!*\n\nBienvenido al bot de Aurum Seul.');
+        await sendMainMenu(chatId);
       } else {
-        await sendMessage(chatId, '❌ *Clave incorrecta.* Intenta de nuevo:');
+        await sendMessage(chatId,'❌ *Clave incorrecta.* Intenta de nuevo:');
       }
       return;
     }
 
     // Check auth
-    if (!isAuth(chatId)) {
-      userState[chatId] = { waitingAuth: true };
-      await sendMessage(chatId, '🔐 *Bot de Aurum Seul*\n\nIngresa la clave de acceso:');
+    if(!isAuth(chatId)){
+      userState[chatId]={waitingAuth:true};
+      await sendMessage(chatId,'🔐 *Bot de Aurum Seul*\n\nIngresa la clave de acceso:');
       return;
     }
 
-    if (text === '/start' || text === '/menu') {
-      await sendMessage(chatId, '👋 *Bienvenido al bot de Aurum Seul!*\n\nConsulta ingresos, targets y nómina de cada equipo en tiempo real.');
-      await sendEquipoMenu(chatId);
-    } else if (text === '/resumen') {
-      await sendMessage(chatId, '📊 Selecciona el equipo para ver el resumen:', {
-        reply_markup: { inline_keyboard: EQUIPOS.map(eq => [{ text: `${EMOJIS[eq] || '🏢'} ${eq}`, callback_data: `eq_res:${eq}` }]) }
-      });
+    if(text==='/start'||text==='/menu'){
+      await sendMainMenu(chatId);
     } else {
-      await sendMessage(chatId, '👋 Usa /start para ver el menú principal.');
+      await sendMainMenu(chatId);
     }
   }
 
-  // Callbacks de botones
-  if (update.callback_query) {
-    const chatId = update.callback_query.message.chat.id;
-    const msgId = update.callback_query.message.message_id;
-    const data = update.callback_query.data;
+  if(update.callback_query){
+    const chatId=update.callback_query.message.chat.id;
+    const data=update.callback_query.data;
+    await tgRequest('answerCallbackQuery',{callback_query_id:update.callback_query.id});
 
-    // Responder al callback para quitar el loading
-    await tgRequest('answerCallbackQuery', { callback_query_id: update.callback_query.id });
-
-    // Check auth
-    if (!isAuth(chatId)) {
-      await sendMessage(chatId, '🔐 Ingresa la clave de acceso primero. Escribe /start');
+    if(!isAuth(chatId)){
+      await sendMessage(chatId,'🔐 Escribe /start e ingresa la clave.');
       return;
     }
 
-    if (data.startsWith('eq:')) {
-      const equipo = data.replace('eq:', '');
-      const mesSaved = (userState[chatId] || {}).mes;
-      userState[chatId] = { equipo, mes: mesSaved };
-      await sendAccionMenu(chatId, equipo);
+    if(data.startsWith('eq:')){
+      const equipo=data.replace('eq:','');
+      userState[chatId]={...userState[chatId],equipo};
+      await sendAccionMenu(chatId,equipo);
 
-    } else if (data.startsWith('mes:')) {
-      const parts = data.split(':');
-      const mesNombre = parts[1];
-      const mesYear = parts[2];
-      userState[chatId] = { ...userState[chatId], mes: mesNombre, mesYear };
-      const equipo = (userState[chatId] || {}).equipo;
-      await sendMessage(chatId, `✅ Mes cambiado a *${mesNombre} ${mesYear}*`);
-      await sendAccionMenu(chatId, equipo);
+    } else if(data.startsWith('main:')){
+      const accion=data.replace('main:','');
+      if(accion==='back'||accion==='menu') await sendMainMenu(chatId);
+      else if(accion==='mes') await sendMesMenu(chatId,'main');
 
-    } else if (data.startsWith('acc:')) {
-      const accion = data.replace('acc:', '');
-      const equipo = (userState[chatId] || {}).equipo;
+    } else if(data.startsWith('mes:')){
+      const parts=data.split(':');
+      const mesNombre=parts[1],mesYear=parts[2],returnTo=parts[3];
+      userState[chatId]={...userState[chatId],mes:mesNombre,mesYear};
+      await sendMessage(chatId,`✅ Mes: *${mesNombre} ${mesYear}*`);
+      if(returnTo==='main') await sendMainMenu(chatId);
+      else if(userState[chatId]&&userState[chatId].equipo) await sendAccionMenu(chatId,userState[chatId].equipo);
+      else await sendMainMenu(chatId);
 
-      if (accion === 'mes') {
-        await sendMesMenu(chatId, equipo);
+    } else if(data.startsWith('acc:')){
+      const accion=data.replace('acc:','');
+      const equipo=(userState[chatId]||{}).equipo;
+      const state=userState[chatId]||{};
+
+      if(accion==='back'||!equipo&&accion!=='dashboard'){
+        await sendMainMenu(chatId);
         return;
       }
 
-      if (accion === 'cambiar' || !equipo) {
-        userState[chatId] = { mes: (userState[chatId] || {}).mes, mesYear: (userState[chatId] || {}).mesYear };
-        await sendEquipoMenu(chatId);
-        return;
-      }
-
-      await sendMessage(chatId, `⏳ Consultando datos de *${equipo}*...`);
-      let respuesta = '';
-      try {
-        const mesFiltro = (userState[chatId] || {}).mes || null;
-        const mesYearFiltro = (userState[chatId] || {}).mesYear || null;
-        if (accion === 'ingresos') respuesta = await responderIngresos(equipo, mesFiltro, mesYearFiltro);
-        else if (accion === 'targets') respuesta = await responderTargets(equipo, mesFiltro, mesYearFiltro);
-        else if (accion === 'nomina') respuesta = await responderNomina(equipo, mesFiltro);
-        else if (accion === 'resumen') respuesta = await responderResumen(equipo, mesFiltro);
-        else if (accion === 'dashboard') respuesta = await responderDashboardTotal(mesFiltro, mesYearFiltro);
-      } catch (e) {
-        respuesta = '❌ Error al obtener datos. Intenta de nuevo.';
+      await sendMessage(chatId,`⏳ Consultando datos...`);
+      let respuesta='';
+      try{
+        if(accion==='ingresos') respuesta=await responderIngresos(equipo,state);
+        else if(accion==='targets') respuesta=await responderTargets(equipo,state);
+        else if(accion==='nomina') respuesta=await responderNomina(equipo,state);
+        else if(accion==='resumen') respuesta=await responderResumen(equipo,state);
+        else if(accion==='dashboard') respuesta=await responderDashboard(state);
+      }catch(e){
+        respuesta='❌ Error al obtener datos. Intenta de nuevo.';
         console.error(e);
       }
 
-      await sendMessage(chatId, respuesta, {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🔄 Ver otra opción', callback_data: `eq:${equipo}` }],
-            [{ text: '🏢 Cambiar equipo', callback_data: `acc:cambiar` }]
-          ]
-        }
-      });
+      const backButtons=accion==='dashboard'
+        ?[[{text:'◀️ Volver al menú',callback_data:'main:back'}]]
+        :[[{text:'🔄 Ver otra opción',callback_data:`eq:${equipo}`}],[{text:'◀️ Menú principal',callback_data:'main:back'}]];
+
+      await sendMessage(chatId,respuesta,{reply_markup:{inline_keyboard:backButtons}});
     }
   }
 }
@@ -605,30 +409,24 @@ async function processUpdate(update) {
 // ══════════════════════════════════════
 // POLLING
 // ══════════════════════════════════════
-let offset = 0;
-
-async function poll() {
-  try {
-    const res = await tgRequest('getUpdates', { offset, timeout: 30, allowed_updates: ['message', 'callback_query'] });
-    if (res.ok && res.result.length) {
-      for (const update of res.result) {
-        offset = update.update_id + 1;
+let offset=0;
+async function poll(){
+  try{
+    const res=await tgRequest('getUpdates',{offset,timeout:30,allowed_updates:['message','callback_query']});
+    if(res.ok&&res.result.length){
+      for(const update of res.result){
+        offset=update.update_id+1;
         processUpdate(update).catch(console.error);
       }
     }
-  } catch (e) {
-    console.error('Poll error:', e.message);
-    await new Promise(r => setTimeout(r, 5000));
+  }catch(e){
+    console.error('Poll error:',e.message);
+    await new Promise(r=>setTimeout(r,5000));
   }
-  setTimeout(poll, 1000);
+  setTimeout(poll,1000);
 }
 
-// Keep-alive server para Railway/Render
-const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200);
-  res.end('Aurum Seul Bot - Online ✅');
-}).listen(PORT, () => console.log(`Server on port ${PORT}`));
-
+const PORT=process.env.PORT||3000;
+http.createServer((req,res)=>{res.writeHead(200);res.end('Aurum Seul Bot - Online ✅');}).listen(PORT,()=>console.log(`Server on port ${PORT}`));
 console.log('🤖 Aurum Seul Bot iniciado...');
 poll();

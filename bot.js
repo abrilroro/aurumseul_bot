@@ -83,21 +83,31 @@ function getMesActual(data){
 // ══════════════════════════════════════
 // FETCH
 // ══════════════════════════════════════
-async function fetchJSON(url){
-  return new Promise((resolve,reject)=>{
-    https.get(url,(res)=>{
-      if(res.statusCode>=300&&res.statusCode<400&&res.headers.location)
-        return fetchJSON(res.headers.location).then(resolve).catch(reject);
-      let data='';
-      res.on('data',c=>data+=c);
-      res.on('end',()=>{ try{resolve(JSON.parse(data));}catch(e){resolve([]);} });
-    }).on('error',reject);
-  });
+async function fetchJSON(url, retries=3){
+  for(let i=0; i<retries; i++){
+    try{
+      const result = await new Promise((resolve,reject)=>{
+        https.get(url,(res)=>{
+          if(res.statusCode>=300&&res.statusCode<400&&res.headers.location)
+            return fetchJSON(res.headers.location,1).then(resolve).catch(reject);
+          let data='';
+          res.on('data',c=>data+=c);
+          res.on('end',()=>{ try{resolve(JSON.parse(data));}catch(e){resolve([]);} });
+        }).on('error',reject);
+      });
+      if(result&&result.length>0) return result;
+      if(i<retries-1){ console.log(`Retry ${i+1} for ${url}`); await new Promise(r=>setTimeout(r,2000)); }
+    }catch(e){
+      console.error(`Fetch error attempt ${i+1}:`,e.message);
+      if(i<retries-1) await new Promise(r=>setTimeout(r,2000));
+    }
+  }
+  return [];
 }
 
 async function getData(){
   const now=Date.now();
-  if(cache.data&&now-cache.ts<5*60*1000) return cache.data;
+  if(cache.data&&now-cache.ts<3*60*1000) return cache.data;
   try{
     const [ing,res,eq,nom,tgt,dash]=await Promise.all([
       fetchJSON(SHEETS.ingresos),

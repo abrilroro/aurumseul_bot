@@ -19,6 +19,10 @@ const SHEETS = {
   dashboard: SCRIPT_URL + '?sheet=Dashboard',
 };
 
+const GRUPOS = {
+  'Aurum': ['Aurum House','PE','EC','Orbex','Corm'],
+  'Seul':  ['Seul','CR'],
+};
 const EQUIPOS = ['Aurum House','PE','EC','CR','Corm','Orbex','Seul'];
 const EMOJIS  = {'Aurum House':'👑','PE':'💎','EC':'🚀','CR':'💹','Corm':'⚡','Orbex':'🔥','Seul':'💰'};
 const MESES   = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
@@ -161,10 +165,21 @@ function getMesLabel(state){
 
 async function sendMainMenu(chatId){
   const mesLabel = getMesLabel(userState[chatId]);
-  const buttons = EQUIPOS.map(eq=>[{text:`${EMOJIS[eq]} ${eq}`,callback_data:`eq:${eq}`}]);
-  buttons.push([{text:`⚡ Dashboard Total`,callback_data:`acc:dashboard`}]);
-  buttons.push([{text:`📅 Cambiar mes (${mesLabel})`,callback_data:`main:mes`}]);
-  return sendMessage(chatId,'🏢 *Selecciona un equipo o acción:*',{reply_markup:{inline_keyboard:buttons}});
+  const buttons = [
+    [{text:'🏆 Aurum', callback_data:'grupo:Aurum'}, {text:'💫 Seul', callback_data:'grupo:Seul'}],
+    [{text:'⚡ Dashboard Total', callback_data:'acc:dashboard'}],
+    [{text:`📅 Cambiar mes (${mesLabel})`, callback_data:'main:mes'}],
+  ];
+  return sendMessage(chatId,'🏢 *Selecciona un grupo o acción:*',{reply_markup:{inline_keyboard:buttons}});
+}
+
+async function sendGrupoMenu(chatId, grupo){
+  const equipos = GRUPOS[grupo]||[];
+  const mesLabel = getMesLabel(userState[chatId]);
+  const buttons = equipos.map(eq=>[{text:`${EMOJIS[eq]||'🏢'} ${eq}`, callback_data:`eq:${eq}`}]);
+  buttons.push([{text:'◀️ Volver', callback_data:'main:back'}]);
+  return sendMessage(chatId,`*${grupo}* — Selecciona un equipo:
+📅 _${mesLabel}_`,{reply_markup:{inline_keyboard:buttons}});
 }
 
 async function sendAccionMenu(chatId,equipo){
@@ -378,7 +393,12 @@ async function processUpdate(update){
       return;
     }
 
-    if(data.startsWith('eq:')){
+    if(data.startsWith('grupo:')){
+      const grupo=data.replace('grupo:','');
+      userState[chatId]={...userState[chatId],grupo};
+      await sendGrupoMenu(chatId,grupo);
+
+    } else if(data.startsWith('eq:')){
       const equipo=data.replace('eq:','');
       userState[chatId]={...userState[chatId],equipo};
       await sendAccionMenu(chatId,equipo);

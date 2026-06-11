@@ -16,6 +16,7 @@ const SHEETS = {
   equipo:    SCRIPT_URL + '?sheet=Equipo',
   nomina:    SCRIPT_URL + '?sheet=Nomina',
   targets:   SCRIPT_URL + '?sheet=Targets',
+  dashboard: SCRIPT_URL + '?sheet=Dashboard',
 };
 
 const EQUIPOS = ['Aurum House','PE','EC','CR','Corm','Orbex','Seul'];
@@ -98,12 +99,13 @@ async function getData(){
   const now=Date.now();
   if(cache.data&&now-cache.ts<5*60*1000) return cache.data;
   try{
-    const [ing,res,eq,nom,tgt]=await Promise.all([
+    const [ing,res,eq,nom,tgt,dash]=await Promise.all([
       fetchJSON(SHEETS.ingresos),
       fetchJSON(SHEETS.resumen),
       fetchJSON(SHEETS.equipo),
       fetchJSON(SHEETS.nomina),
       fetchJSON(SHEETS.targets),
+      fetchJSON(SHEETS.dashboard),
     ]);
     ing.forEach(r=>{
       r._v=parseMoney(r['Valor Neto']);
@@ -131,7 +133,7 @@ async function getData(){
       r._meta=parseMoney(r['Meta']);
       r['Equipo']=normEq(parseStr(r['Equipo']));
     });
-    cache={data:{ing,res,eq,nom,tgt},ts:now};
+    cache={data:{ing,res,eq,nom,tgt,dash},ts:now};
     return cache.data;
   }catch(e){
     console.error('Error fetching:',e.message);
@@ -191,8 +193,17 @@ function getMesFiltro(state){
 async function responderIngresos(equipo,state){
   const {ing}=await getData();
   const mes=getMesFiltro(state);
+  // Debug: ver qué meses existen en los datos
+  const mesesUnicos=[...new Set(ing.map(r=>(r['Mes']||'').toLowerCase().trim()))].filter(Boolean);
+  const equiposUnicos=[...new Set(ing.map(r=>r['Equipo']))].filter(Boolean);
+  console.log('Meses en datos:',mesesUnicos);
+  console.log('Equipos en datos:',equiposUnicos);
+  console.log('Buscando mes:',mes,'equipo:',equipo);
   const data=ing.filter(r=>r['Equipo']===equipo&&(r['Mes']||'').toLowerCase().includes(mes));
-  if(!data.length) return `❌ No hay ingresos para *${equipo}* en ${mes}.`;
+  console.log('Filas encontradas:',data.length);
+  if(!data.length) return `❌ No hay ingresos para *${equipo}* en ${mes}.
+
+_Debug: meses disponibles: ${mesesUnicos.join(', ')}_`;
   const total=data.reduce((a,r)=>a+r._v,0);
   const byAg={};
   data.forEach(r=>{byAg[r['Agente']]=(byAg[r['Agente']]||0)+r._v;});
@@ -259,36 +270,38 @@ async function responderNomina(equipo,state){
 }
 
 async function responderResumen(equipo,state){
-  const {ing,nom,res}=await getData();
-  const mes=getMesFiltro(state);
-  const ingEq=ing.filter(r=>r['Equipo']===equipo&&(r['Mes']||'').toLowerCase().includes(mes));
-  const nomEq=nom.filter(r=>r['Equipo']===equipo);
+  const {nom,res}=await getData();
+  // Leer directamente de hoja Resumen
   const resRow=res.find(r=>norm(r['Equipo'])===norm(equipo));
-  const totalIng=ingEq.reduce((a,r)=>a+r._v,0);
+  if(!resRow) return `❌ No hay datos de resumen para *${equipo}*.`;
+  const totalIng=resRow._ing;
+  const meta=resRow._meta;
+  const pct=meta>0?(totalIng/meta*100):parseFloat(String(resRow['% De avance']||'0').replace('%',''))||0;
+  const nomEq=nom.filter(r=>r['Equipo']===equipo);
   const totalNom=nomEq.reduce((a,r)=>a+r._tot,0);
   const balance=totalIng-totalNom;
-  const meta=resRow?resRow._meta:0;
-  const pct=meta>0?(totalIng/meta*100):0;
-  let msg=`${EMOJIS[equipo]||'🏢'} *${equipo} — Resumen*\n📅 _${mes}_\n━━━━━━━━━━━━━━━━━━━\n`;
-  msg+=`💰 *Ingresos: ${fmt(totalIng)}*\n💳 Nómina: ${fmt(totalNom)}\n${balance>=0?'✅':'🔴'} Balance: *${balance>=0?'+':''}${fmt(balance)}*\n`;
+  let msg=`${EMOJIS[equipo]||'🏢'} *${equipo} — Resumen*\n━━━━━━━━━━━━━━━━━━━\n`;
+  msg+=`💰 *Ingresos: ${fmt(totalIng)}*\n`;
+  msg+=`💳 Nómina: ${fmt(totalNom)}\n`;
+  msg+=`${balance>=0?'✅':'🔴'} Balance: *${balance>=0?'+':''}${fmt(balance)}*\n`;
   if(meta>0){
     msg+=`\n🎯 *Target: ${fmt(meta)}*\n${progBar(pct)} ${pct.toFixed(1)}%\n`;
     msg+=pct>=100?'✅ Meta cumplida!':pct>=60?'⚠️ En camino':'🔴 Necesita atención';
     msg+='\n';
   }
-  if(resRow&&resRow['Alerta']) msg+=`\n${resRow['Alerta']}\n`;
-  msg+=`\n👥 Agentes: ${new Set(ingEq.map(r=>r['Agente'])).size} · 📊 ${ingEq.length} transacciones\n`;
+  if(resRow['Alerta']) msg+=`\n${resRow['Alerta']}\n`;
   return msg;
 }
 
 async function responderDashboard(state){
-  const {ing,nom}=await getData();
-  const mes=getMesFiltro(state);
-  const ingMes=ing.filter(r=>(r['Mes']||'').toLowerCase().includes(mes));
-  const totalIng=ingMes.reduce((a,r)=>a+r._v,0);
-  const totalNom=nom.reduce((a,r)=>a+r._tot,0);
-  const balance=totalIng-totalNom;
-  let msg=`⚡ *Dashboard General*\n📅 _${mes}_\n━━━━━━━━━━━━━━━━━━━\n`;
+  const {dash}=await getData();
+  // Leer directamente de hoja Dashboard: Total ingresos, Total nomina, Balance
+  const row=dash&&dash[0];
+  if(!row) return '❌ No se pudo leer el Dashboard.';
+  const totalIng=parseMoney(row['Total ingresos']||row['Total Ingresos']||Object.values(row)[0]);
+  const totalNom=parseMoney(row['Total nomina']||row['Total Nomina']||Object.values(row)[1]);
+  const balance=parseMoney(row['Balance']||Object.values(row)[2]);
+  let msg=`⚡ *Dashboard General*\n━━━━━━━━━━━━━━━━━━━\n`;
   msg+=`💰 *Total Ingresos: ${fmt(totalIng)}*\n`;
   msg+=`💳 *Total Nómina: ${fmt(totalNom)}*\n`;
   msg+=`${balance>=0?'✅':'🔴'} *Balance: ${balance>=0?'+':''}${fmt(balance)}*\n`;

@@ -320,16 +320,53 @@ async function responderResumen(equipo,state){
 
 async function responderDashboard(state){
   const {dash}=await getData();
-  // Leer directamente de hoja Dashboard: Total ingresos, Total nomina, Balance
-  const row=dash&&dash[0];
-  if(!row) return '❌ No se pudo leer el Dashboard.';
-  const totalIng=parseMoney(row['Total ingresos']||row['Total Ingresos']||Object.values(row)[0]);
-  const totalNom=parseMoney(row['Total nomina']||row['Total Nomina']||Object.values(row)[1]);
-  const balance=parseMoney(row['Balance']||Object.values(row)[2]);
+  if(!dash||!dash.length) return '❌ No se pudo leer el Dashboard.';
+
+  // Fila 2 (índice 0): A=Ingresos, B=Nomina, C=Trafico, D=Balance
+  const row2=dash[0];
+  const vals2=Object.values(row2);
+  const totalIng=parseMoney(vals2[0]);
+  const totalNom=parseMoney(vals2[1]);
+  const totalTrafico=parseMoney(vals2[2]);
+  const balanceGeneral=parseMoney(vals2[3]);
+
   let msg=`⚡ *Dashboard General*\n━━━━━━━━━━━━━━━━━━━\n`;
   msg+=`💰 *Total Ingresos: ${fmt(totalIng)}*\n`;
   msg+=`💳 *Total Nómina: ${fmt(totalNom)}*\n`;
-  msg+=`${balance>=0?'✅':'🔴'} *Balance: ${balance>=0?'+':''}${fmt(balance)}*\n`;
+  msg+=`🌐 *Total Tráfico: ${fmt(totalTrafico)}*\n`;
+  msg+=`${balanceGeneral>=0?'✅':'🔴'} *Balance General: ${balanceGeneral>=0?'+':''}${fmt(balanceGeneral)}*\n`;
+
+  // Fila 7 (índice 6): A=nombre, B=pagos(trafico), C=ingresos, D=nomina, E=balance
+  // Fila 8 (índice 7): A=nombre, B=pagos(trafico), C=ingresos, D=nomina, E=balance
+  if(dash.length>6){
+    const rowAurum=dash[6];
+    const valsAurum=Object.values(rowAurum);
+    const aurumNombre=valsAurum[0]||'Aurum';
+    const aurumPagos=parseMoney(valsAurum[1]);
+    const aurumIngresos=parseMoney(valsAurum[2]);
+    const aurumNomina=parseMoney(valsAurum[3]);
+    const aurumBalance=parseMoney(valsAurum[4]);
+    msg+=`\n${EMOJIS['Aurum House']||'🏆'} *${aurumNombre}*\n`;
+    msg+=`   💰 Ingresos: ${fmt(aurumIngresos)}\n`;
+    msg+=`   🌐 Tráfico: ${fmt(aurumPagos)}\n`;
+    msg+=`   💳 Nómina: ${fmt(aurumNomina)}\n`;
+    msg+=`   ${aurumBalance>=0?'✅':'🔴'} Balance: *${aurumBalance>=0?'+':''}${fmt(aurumBalance)}*\n`;
+  }
+  if(dash.length>7){
+    const rowSeul=dash[7];
+    const valsSeul=Object.values(rowSeul);
+    const seulNombre=valsSeul[0]||'Seul';
+    const seulPagos=parseMoney(valsSeul[1]);
+    const seulIngresos=parseMoney(valsSeul[2]);
+    const seulNomina=parseMoney(valsSeul[3]);
+    const seulBalance=parseMoney(valsSeul[4]);
+    msg+=`\n${EMOJIS['Seul']||'💫'} *${seulNombre}*\n`;
+    msg+=`   💰 Ingresos: ${fmt(seulIngresos)}\n`;
+    msg+=`   🌐 Tráfico: ${fmt(seulPagos)}\n`;
+    msg+=`   💳 Nómina: ${fmt(seulNomina)}\n`;
+    msg+=`   ${seulBalance>=0?'✅':'🔴'} Balance: *${seulBalance>=0?'+':''}${fmt(seulBalance)}*\n`;
+  }
+
   return msg;
 }
 

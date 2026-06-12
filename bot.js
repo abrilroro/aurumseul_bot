@@ -322,14 +322,6 @@ async function responderDashboard(state){
   const {dash}=await getData();
   if(!dash||!dash.length) return '❌ No se pudo leer el Dashboard.';
 
-  // DEBUG: mostrar todas las filas
-  let debugMsg = '🔍 *Debug - Filas del Dashboard:*\n';
-  dash.forEach((row,i)=>{
-    const vals=Object.values(row);
-    debugMsg += `Fila ${i+2} (idx ${i}): [${vals.slice(0,5).join(' | ')}]\n`;
-  });
-  console.log(debugMsg);
-
   // Fila 2 (índice 0): A=Ingresos, B=Nomina, C=Trafico, D=Balance
   const row2=dash[0];
   const vals2=Object.values(row2);
@@ -346,8 +338,8 @@ async function responderDashboard(state){
 
   // Fila 7 (índice 6): A=nombre, B=pagos(trafico), C=ingresos, D=nomina, E=balance
   // Fila 8 (índice 7): A=nombre, B=pagos(trafico), C=ingresos, D=nomina, E=balance
-  if(dash.length>6){
-    const rowAurum=dash[6];
+  if(dash.length>5){
+    const rowAurum=dash[5];
     const valsAurum=Object.values(rowAurum);
     const aurumNombre=valsAurum[0]||'Aurum';
     const aurumPagos=parseMoney(valsAurum[1]);
@@ -360,8 +352,8 @@ async function responderDashboard(state){
     msg+=`   💳 Nómina: ${fmt(aurumNomina)}\n`;
     msg+=`   ${aurumBalance>=0?'✅':'🔴'} Balance: *${aurumBalance>=0?'+':''}${fmt(aurumBalance)}*\n`;
   }
-  if(dash.length>7){
-    const rowSeul=dash[7];
+  if(dash.length>6){
+    const rowSeul=dash[6];
     const valsSeul=Object.values(rowSeul);
     const seulNombre=valsSeul[0]||'Seul';
     const seulPagos=parseMoney(valsSeul[1]);
@@ -375,7 +367,7 @@ async function responderDashboard(state){
     msg+=`   ${seulBalance>=0?'✅':'🔴'} Balance: *${seulBalance>=0?'+':''}${fmt(seulBalance)}*\n`;
   }
 
-  return msg + '\n\n' + debugMsg;
+  return msg;
 }
 
 // ══════════════════════════════════════

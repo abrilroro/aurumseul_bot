@@ -322,6 +322,14 @@ async function responderDashboard(state){
   const {dash}=await getData();
   if(!dash||!dash.length) return '❌ No se pudo leer el Dashboard.';
 
+  // DEBUG: mostrar todas las filas
+  let debugMsg = '🔍 *Debug - Filas del Dashboard:*\n';
+  dash.forEach((row,i)=>{
+    const vals=Object.values(row);
+    debugMsg += `Fila ${i+2} (idx ${i}): [${vals.slice(0,5).join(' | ')}]\n`;
+  });
+  console.log(debugMsg);
+
   // Fila 2 (índice 0): A=Ingresos, B=Nomina, C=Trafico, D=Balance
   const row2=dash[0];
   const vals2=Object.values(row2);
@@ -367,7 +375,7 @@ async function responderDashboard(state){
     msg+=`   ${seulBalance>=0?'✅':'🔴'} Balance: *${seulBalance>=0?'+':''}${fmt(seulBalance)}*\n`;
   }
 
-  return msg;
+  return msg + '\n\n' + debugMsg;
 }
 
 // ══════════════════════════════════════

@@ -43,6 +43,16 @@ function addAuth(id){ authorizedUsers.add(String(id)); saveAuth(); }
 const userState = {};
 
 // ══════════════════════════════════════
+// REPORTES AUTOMÁTICOS
+// ══════════════════════════════════════
+const SUBS_FILE = '/tmp/aurum_subs.json';
+let subscribers = new Set();
+try { subscribers = new Set(JSON.parse(fs.readFileSync(SUBS_FILE,'utf8'))); } catch(e) {}
+function saveSubs(){ try{ fs.writeFileSync(SUBS_FILE, JSON.stringify([...subscribers])); }catch(e){} }
+function addSub(id){ subscribers.add(String(id)); saveSubs(); }
+function removeSub(id){ subscribers.delete(String(id)); saveSubs(); }
+
+// ══════════════════════════════════════
 // CACHE
 // ══════════════════════════════════════
 let cache = { data: null, ts: 0 };
@@ -370,6 +380,89 @@ async function responderDashboard(state){
   return msg;
 }
 
+
+// ══════════════════════════════════════
+// REPORTE DIARIO COMPLETO
+// ══════════════════════════════════════
+async function generarReporteDiario(){
+  const {res} = await getData();
+  const fecha = new Date().toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+
+  let msg = `📋 *REPORTE DIARIO*\n📅 _${fecha}_\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━\n\n`;
+
+  // Dashboard general
+  const dashMsg = await responderDashboard({});
+  msg += dashMsg + '\n\n';
+  msg += `━━━━━━━━━━━━━━━━━━━\n`;
+
+  // Resumen por equipo (desde hoja Resumen)
+  msg += `\n📊 *RESUMEN POR EQUIPO*\n`;
+  const equiposRes = res.filter(r=>r['Equipo']&&r._ing>=0);
+  equiposRes.forEach(r=>{
+    const eq = r['Equipo'];
+    const ing = r._ing;
+    const meta = r._meta;
+    const pct = meta>0 ? (ing/meta*100) : (parseFloat(String(r['% De avance']||'0').replace('%',''))||0);
+    const emoji = EMOJIS[eq] || '🏢';
+    const estado = pct>=80?'✅':pct>=40?'⚠️':'🔴';
+    msg += `\n${emoji} *${eq}*: ${fmt(ing)}`;
+    if(meta>0) msg += ` / ${fmtK(meta)} (${pct.toFixed(0)}% ${estado})`;
+  });
+
+  // Alertas - equipos en rojo
+  const alertas = equiposRes.filter(r=>{
+    const meta = r._meta;
+    const pct = meta>0 ? (r._ing/meta*100) : (parseFloat(String(r['% De avance']||'0').replace('%',''))||0);
+    return pct < 40;
+  });
+  if(alertas.length){
+    msg += `\n\n🚨 *ALERTAS - EQUIPOS EN ROJO*\n`;
+    alertas.forEach(r=>{
+      const eq = r['Equipo'];
+      const meta = r._meta;
+      const pct = meta>0 ? (r._ing/meta*100) : (parseFloat(String(r['% De avance']||'0').replace('%',''))||0);
+      msg += `\n🔴 *${eq}*: solo ${pct.toFixed(1)}% de su meta`;
+      if(r['Alerta']) msg += ` — ${r['Alerta']}`;
+    });
+  } else {
+    msg += `\n\n✅ *Sin alertas críticas hoy*`;
+  }
+
+  return msg;
+}
+function fmtK(n){
+  if(Math.abs(n)>=1000000) return '$'+(n/1000000).toFixed(1)+'M';
+  if(Math.abs(n)>=1000) return '$'+(n/1000).toFixed(0)+'k';
+  return fmt(n);
+}
+
+async function enviarReporteATodos(){
+  cache.ts = 0; // forzar refresh
+  const reporte = await generarReporteDiario();
+  for(const chatId of subscribers){
+    try{ await sendMessage(chatId, reporte); }
+    catch(e){ console.error('Error enviando a',chatId,e.message); }
+  }
+  console.log('Reporte enviado a',subscribers.size,'usuarios');
+}
+
+// Scheduler: revisa cada minuto si es hora del reporte (22:00 hora España = Europe/Madrid)
+let lastReportDate = '';
+function checkSchedule(){
+  const now = new Date();
+  const madridTime = new Date(now.toLocaleString('en-US',{timeZone:'Europe/Madrid'}));
+  const hh = madridTime.getHours();
+  const mm = madridTime.getMinutes();
+  const dateKey = madridTime.toDateString();
+
+  if(hh===22 && mm===0 && lastReportDate!==dateKey){
+    lastReportDate = dateKey;
+    enviarReporteATodos().catch(console.error);
+  }
+}
+setInterval(checkSchedule, 60*1000);
+
 // ══════════════════════════════════════
 // TELEGRAM API
 // ══════════════════════════════════════
@@ -415,6 +508,16 @@ async function processUpdate(update){
 
     if(text==='/start'||text==='/menu'){
       await sendMainMenu(chatId);
+    } else if(text==='/reporte'){
+      await sendMessage(chatId,'⏳ Generando reporte...');
+      const reporte = await generarReporteDiario();
+      await sendMessage(chatId, reporte);
+    } else if(text==='/suscribir'){
+      addSub(chatId);
+      await sendMessage(chatId,'✅ *Suscrito!*\n\nRecibirás el reporte diario automático a las 22:00 (hora España).');
+    } else if(text==='/desuscribir'){
+      removeSub(chatId);
+      await sendMessage(chatId,'❌ Desuscrito del reporte diario.');
     } else {
       await sendMainMenu(chatId);
     }

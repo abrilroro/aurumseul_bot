@@ -19,6 +19,10 @@ const SHEETS = {
   dashboard: SCRIPT_URL + '?sheet=Dashboard',
 };
 
+const GRUPOS = {
+  'Aurum': ['Aurum House','PE','EC','Orbex','Corm'],
+  'Seul':  ['Seul','CR'],
+};
 const EQUIPOS = ['Aurum House','PE','EC','CR','Corm','Orbex','Seul'];
 const EMOJIS  = {'Aurum House':'👑','PE':'💎','EC':'🚀','CR':'💹','Corm':'⚡','Orbex':'🔥','Seul':'💰'};
 const MESES   = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
@@ -37,6 +41,16 @@ function addAuth(id){ authorizedUsers.add(String(id)); saveAuth(); }
 // STATE
 // ══════════════════════════════════════
 const userState = {};
+
+// ══════════════════════════════════════
+// REPORTES AUTOMÁTICOS
+// ══════════════════════════════════════
+const SUBS_FILE = '/tmp/aurum_subs.json';
+let subscribers = new Set();
+try { subscribers = new Set(JSON.parse(fs.readFileSync(SUBS_FILE,'utf8'))); } catch(e) {}
+function saveSubs(){ try{ fs.writeFileSync(SUBS_FILE, JSON.stringify([...subscribers])); }catch(e){} }
+function addSub(id){ subscribers.add(String(id)); saveSubs(); }
+function removeSub(id){ subscribers.delete(String(id)); saveSubs(); }
 
 // ══════════════════════════════════════
 // CACHE
@@ -67,7 +81,6 @@ function progBar(pct,len=10){
   return '█'.repeat(f)+'░'.repeat(len-f);
 }
 function norm(s){ return (s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim(); }
-function esFinDeSemana(){ const d=new Date().getDay(); return d===0||d===6; } // 0=domingo, 6=sabado
 function normEq(e){
   const map={'aurum house':'Aurum House','pe':'PE','ec':'EC','cr':'CR','corm':'Corm','seul':'Seul','orbex':'Orbex'};
   return map[(e||'').toLowerCase().trim()]||(e||'').trim();
@@ -84,21 +97,31 @@ function getMesActual(data){
 // ══════════════════════════════════════
 // FETCH
 // ══════════════════════════════════════
-async function fetchJSON(url){
-  return new Promise((resolve,reject)=>{
-    https.get(url,(res)=>{
-      if(res.statusCode>=300&&res.statusCode<400&&res.headers.location)
-        return fetchJSON(res.headers.location).then(resolve).catch(reject);
-      let data='';
-      res.on('data',c=>data+=c);
-      res.on('end',()=>{ try{resolve(JSON.parse(data));}catch(e){resolve([]);} });
-    }).on('error',reject);
-  });
+async function fetchJSON(url, retries=3){
+  for(let i=0; i<retries; i++){
+    try{
+      const result = await new Promise((resolve,reject)=>{
+        https.get(url,(res)=>{
+          if(res.statusCode>=300&&res.statusCode<400&&res.headers.location)
+            return fetchJSON(res.headers.location,1).then(resolve).catch(reject);
+          let data='';
+          res.on('data',c=>data+=c);
+          res.on('end',()=>{ try{resolve(JSON.parse(data));}catch(e){resolve([]);} });
+        }).on('error',reject);
+      });
+      if(result&&result.length>0) return result;
+      if(i<retries-1){ console.log(`Retry ${i+1} for ${url}`); await new Promise(r=>setTimeout(r,2000)); }
+    }catch(e){
+      console.error(`Fetch error attempt ${i+1}:`,e.message);
+      if(i<retries-1) await new Promise(r=>setTimeout(r,2000));
+    }
+  }
+  return [];
 }
 
 async function getData(){
   const now=Date.now();
-  if(cache.data&&now-cache.ts<5*60*1000) return cache.data;
+  if(cache.data&&now-cache.ts<3*60*1000) return cache.data;
   try{
     const [ing,res,eq,nom,tgt,dash]=await Promise.all([
       fetchJSON(SHEETS.ingresos),
@@ -138,7 +161,7 @@ async function getData(){
     return cache.data;
   }catch(e){
     console.error('Error fetching:',e.message);
-    return cache.data||{ing:[],res:[],eq:[],nom:[],tgt:[],dash:[]};
+    return cache.data||{ing:[],res:[],eq:[],nom:[],tgt:[]};
   }
 }
 
@@ -152,10 +175,21 @@ function getMesLabel(state){
 
 async function sendMainMenu(chatId){
   const mesLabel = getMesLabel(userState[chatId]);
-  const buttons = EQUIPOS.map(eq=>[{text:`${EMOJIS[eq]} ${eq}`,callback_data:`eq:${eq}`}]);
-  buttons.push([{text:`⚡ Dashboard Total`,callback_data:`acc:dashboard`}]);
-  buttons.push([{text:`📅 Cambiar mes (${mesLabel})`,callback_data:`main:mes`}]);
-  return sendMessage(chatId,'🏢 *Selecciona un equipo o acción:*',{reply_markup:{inline_keyboard:buttons}});
+  const buttons = [
+    [{text:'🏆 Aurum', callback_data:'grupo:Aurum'}, {text:'💫 Seul', callback_data:'grupo:Seul'}],
+    [{text:'⚡ Dashboard Total', callback_data:'acc:dashboard'}],
+    [{text:`📅 Cambiar mes (${mesLabel})`, callback_data:'main:mes'}],
+  ];
+  return sendMessage(chatId,'🏢 *Selecciona un grupo o acción:*',{reply_markup:{inline_keyboard:buttons}});
+}
+
+async function sendGrupoMenu(chatId, grupo){
+  const equipos = GRUPOS[grupo]||[];
+  const mesLabel = getMesLabel(userState[chatId]);
+  const buttons = equipos.map(eq=>[{text:`${EMOJIS[eq]||'🏢'} ${eq}`, callback_data:`eq:${eq}`}]);
+  buttons.push([{text:'◀️ Volver', callback_data:'main:back'}]);
+  return sendMessage(chatId,`*${grupo}* — Selecciona un equipo:
+📅 _${mesLabel}_`,{reply_markup:{inline_keyboard:buttons}});
 }
 
 async function sendAccionMenu(chatId,equipo){
@@ -194,8 +228,17 @@ function getMesFiltro(state){
 async function responderIngresos(equipo,state){
   const {ing}=await getData();
   const mes=getMesFiltro(state);
+  // Debug: ver qué meses existen en los datos
+  const mesesUnicos=[...new Set(ing.map(r=>(r['Mes']||'').toLowerCase().trim()))].filter(Boolean);
+  const equiposUnicos=[...new Set(ing.map(r=>r['Equipo']))].filter(Boolean);
+  console.log('Meses en datos:',mesesUnicos);
+  console.log('Equipos en datos:',equiposUnicos);
+  console.log('Buscando mes:',mes,'equipo:',equipo);
   const data=ing.filter(r=>r['Equipo']===equipo&&(r['Mes']||'').toLowerCase().includes(mes));
-  if(!data.length) return `❌ No hay ingresos para *${equipo}* en ${mes}.`;
+  console.log('Filas encontradas:',data.length);
+  if(!data.length) return `❌ No hay ingresos para *${equipo}* en ${mes}.
+
+_Debug: meses disponibles: ${mesesUnicos.join(', ')}_`;
   const total=data.reduce((a,r)=>a+r._v,0);
   const byAg={};
   data.forEach(r=>{byAg[r['Agente']]=(byAg[r['Agente']]||0)+r._v;});
@@ -262,44 +305,169 @@ async function responderNomina(equipo,state){
 }
 
 async function responderResumen(equipo,state){
-  const {ing,nom,res}=await getData();
-  const mes=getMesFiltro(state);
-  const ingEq=ing.filter(r=>r['Equipo']===equipo&&(r['Mes']||'').toLowerCase().includes(mes));
-  const nomEq=nom.filter(r=>r['Equipo']===equipo);
+  const {nom,res}=await getData();
+  // Leer directamente de hoja Resumen
   const resRow=res.find(r=>norm(r['Equipo'])===norm(equipo));
-  const totalIng=ingEq.reduce((a,r)=>a+r._v,0);
+  if(!resRow) return `❌ No hay datos de resumen para *${equipo}*.`;
+  const totalIng=resRow._ing;
+  const meta=resRow._meta;
+  const pct=meta>0?(totalIng/meta*100):parseFloat(String(resRow['% De avance']||'0').replace('%',''))||0;
+  const nomEq=nom.filter(r=>r['Equipo']===equipo);
   const totalNom=nomEq.reduce((a,r)=>a+r._tot,0);
   const balance=totalIng-totalNom;
-  const meta=resRow?resRow._meta:0;
-  const pct=meta>0?(totalIng/meta*100):0;
-  let msg=`${EMOJIS[equipo]||'🏢'} *${equipo} — Resumen*\n📅 _${mes}_\n━━━━━━━━━━━━━━━━━━━\n`;
-  msg+=`💰 *Ingresos: ${fmt(totalIng)}*\n💳 Nómina: ${fmt(totalNom)}\n${balance>=0?'✅':'🔴'} Balance: *${balance>=0?'+':''}${fmt(balance)}*\n`;
+  let msg=`${EMOJIS[equipo]||'🏢'} *${equipo} — Resumen*\n━━━━━━━━━━━━━━━━━━━\n`;
+  msg+=`💰 *Ingresos: ${fmt(totalIng)}*\n`;
+  msg+=`💳 Nómina: ${fmt(totalNom)}\n`;
+  msg+=`${balance>=0?'✅':'🔴'} Balance: *${balance>=0?'+':''}${fmt(balance)}*\n`;
   if(meta>0){
     msg+=`\n🎯 *Target: ${fmt(meta)}*\n${progBar(pct)} ${pct.toFixed(1)}%\n`;
     msg+=pct>=100?'✅ Meta cumplida!':pct>=60?'⚠️ En camino':'🔴 Necesita atención';
     msg+='\n';
   }
-  if(resRow&&resRow['Alerta']) msg+=`\n${resRow['Alerta']}\n`;
-  msg+=`\n👥 Agentes: ${new Set(ingEq.map(r=>r['Agente'])).size} · 📊 ${ingEq.length} transacciones\n`;
+  if(resRow['Alerta']) msg+=`\n${resRow['Alerta']}\n`;
   return msg;
 }
 
 async function responderDashboard(state){
   const {dash}=await getData();
-  const row=(dash&&dash[0])?dash[0]:{};
-  const totalIng=parseMoney(row['Total ingresos']);
-  const totalNom=parseMoney(row['Total nomina']);
-  const totalTraf=parseMoney(row['Total Trafico']);
-  const pagosExtra=parseMoney(row['Pagos Extra']);
-  const balance=totalIng-totalNom-totalTraf-pagosExtra;
+  if(!dash||!dash.length) return '❌ No se pudo leer el Dashboard.';
+
+  // Fila 2 (índice 0). Leemos por NOMBRE de columna para que no se rompa si se agregan columnas nuevas.
+  const row2=dash[0];
+  const totalIng=parseMoney(row2['Total ingresos']);
+  const totalNom=parseMoney(row2['Total nomina']);
+  const totalTrafico=parseMoney(row2['Total Trafico']);
+  const pagosExtra=parseMoney(row2['Pagos Extra']);
+  const balanceGeneral=parseMoney(row2['Balance']); // la hoja ya resta los pagos extra en el Balance
+
   let msg=`⚡ *Dashboard General*\n━━━━━━━━━━━━━━━━━━━\n`;
   msg+=`💰 *Total Ingresos: ${fmt(totalIng)}*\n`;
-  msg+=`💳 Total Nómina: ${fmt(totalNom)}\n`;
-  msg+=`🚚 Total Tráfico: ${fmt(totalTraf)}\n`;
-  msg+=`➕ Pagos Extra: ${fmt(pagosExtra)}\n`;
-  msg+=`${balance>=0?'✅':'🔴'} *Balance: ${balance>=0?'+':''}${fmt(balance)}*\n`;
+  msg+=`💳 *Total Nómina: ${fmt(totalNom)}*\n`;
+  msg+=`🌐 *Total Tráfico: ${fmt(totalTrafico)}*\n`;
+  msg+=`➕ *Pagos Extra: ${fmt(pagosExtra)}*\n`;
+  msg+=`${balanceGeneral>=0?'✅':'🔴'} *Balance General: ${balanceGeneral>=0?'+':''}${fmt(balanceGeneral)}*\n`;
+
+  // Fila 7 (índice 6): A=nombre, B=pagos(trafico), C=ingresos, D=nomina, E=balance
+  // Fila 8 (índice 7): A=nombre, B=pagos(trafico), C=ingresos, D=nomina, E=balance
+  if(dash.length>5){
+    const rowAurum=dash[5];
+    const valsAurum=Object.values(rowAurum);
+    const aurumNombre=valsAurum[0]||'Aurum';
+    const aurumPagos=parseMoney(valsAurum[1]);
+    const aurumIngresos=parseMoney(valsAurum[2]);
+    const aurumNomina=parseMoney(valsAurum[4]);
+    const aurumBalance=parseMoney(valsAurum[5]);
+    msg+=`\n${EMOJIS['Aurum House']||'🏆'} *${aurumNombre}*\n`;
+    msg+=`   💰 Ingresos: ${fmt(aurumIngresos)}\n`;
+    msg+=`   🌐 Tráfico: ${fmt(aurumPagos)}\n`;
+    msg+=`   💳 Nómina: ${fmt(aurumNomina)}\n`;
+    msg+=`   ${aurumBalance>=0?'✅':'🔴'} Balance: *${aurumBalance>=0?'+':''}${fmt(aurumBalance)}*\n`;
+  }
+  if(dash.length>6){
+    const rowSeul=dash[6];
+    const valsSeul=Object.values(rowSeul);
+    const seulNombre=valsSeul[0]||'Seul';
+    const seulPagos=parseMoney(valsSeul[1]);
+    const seulIngresos=parseMoney(valsSeul[2]);
+    const seulNomina=parseMoney(valsSeul[4]);
+    const seulBalance=parseMoney(valsSeul[5]);
+    msg+=`\n${EMOJIS['Seul']||'💫'} *${seulNombre}*\n`;
+    msg+=`   💰 Ingresos: ${fmt(seulIngresos)}\n`;
+    msg+=`   🌐 Tráfico: ${fmt(seulPagos)}\n`;
+    msg+=`   💳 Nómina: ${fmt(seulNomina)}\n`;
+    msg+=`   ${seulBalance>=0?'✅':'🔴'} Balance: *${seulBalance>=0?'+':''}${fmt(seulBalance)}*\n`;
+  }
+
   return msg;
 }
+
+
+// ══════════════════════════════════════
+// REPORTE DIARIO COMPLETO
+// ══════════════════════════════════════
+async function generarReporteDiario(){
+  const {res} = await getData();
+  const fecha = new Date().toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+
+  let msg = `📋 *REPORTE DIARIO*\n📅 _${fecha}_\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━\n\n`;
+
+  // Dashboard general
+  const dashMsg = await responderDashboard({});
+  msg += dashMsg + '\n\n';
+  msg += `━━━━━━━━━━━━━━━━━━━\n`;
+
+  // Resumen por equipo (desde hoja Resumen)
+  msg += `\n📊 *RESUMEN POR EQUIPO*\n`;
+  const equiposRes = res.filter(r=>r['Equipo']&&r._ing>=0);
+  equiposRes.forEach(r=>{
+    const eq = r['Equipo'];
+    const ing = r._ing;
+    const meta = r._meta;
+    const pct = meta>0 ? (ing/meta*100) : (parseFloat(String(r['% De avance']||'0').replace('%',''))||0);
+    const emoji = EMOJIS[eq] || '🏢';
+    const estado = pct>=80?'✅':pct>=40?'⚠️':'🔴';
+    msg += `\n${emoji} *${eq}*: ${fmt(ing)}`;
+    if(meta>0) msg += ` / ${fmtK(meta)} (${pct.toFixed(0)}% ${estado})`;
+  });
+
+  // Alertas - equipos en rojo
+  const alertas = equiposRes.filter(r=>{
+    const meta = r._meta;
+    const pct = meta>0 ? (r._ing/meta*100) : (parseFloat(String(r['% De avance']||'0').replace('%',''))||0);
+    return pct < 40;
+  });
+  if(alertas.length){
+    msg += `\n\n🚨 *ALERTAS - EQUIPOS EN ROJO*\n`;
+    alertas.forEach(r=>{
+      const eq = r['Equipo'];
+      const meta = r._meta;
+      const pct = meta>0 ? (r._ing/meta*100) : (parseFloat(String(r['% De avance']||'0').replace('%',''))||0);
+      msg += `\n🔴 *${eq}*: solo ${pct.toFixed(1)}% de su meta`;
+      if(r['Alerta']) msg += ` — ${r['Alerta']}`;
+    });
+  } else {
+    msg += `\n\n✅ *Sin alertas críticas hoy*`;
+  }
+
+  return msg;
+}
+function fmtK(n){
+  if(Math.abs(n)>=1000000) return '$'+(n/1000000).toFixed(1)+'M';
+  if(Math.abs(n)>=1000) return '$'+(n/1000).toFixed(0)+'k';
+  return fmt(n);
+}
+
+async function enviarReporteATodos(){
+  cache.ts = 0; // forzar refresh
+  const reporte = await generarReporteDiario();
+  for(const chatId of subscribers){
+    try{ await sendMessage(chatId, reporte); }
+    catch(e){ console.error('Error enviando a',chatId,e.message); }
+  }
+  console.log('Reporte enviado a',subscribers.size,'usuarios');
+}
+
+// Scheduler: revisa cada minuto si es hora del reporte (22:00 hora España = Europe/Madrid)
+let lastReportDate = '';
+function checkSchedule(){
+  const now = new Date();
+  const madridTime = new Date(now.toLocaleString('en-US',{timeZone:'Europe/Madrid'}));
+  const hh = madridTime.getHours();
+  const mm = madridTime.getMinutes();
+  const dia = madridTime.getDay(); // 0=domingo, 6=sábado
+  const dateKey = madridTime.toDateString();
+
+  if(hh===22 && mm===0 && lastReportDate!==dateKey){
+    lastReportDate = dateKey;
+    if(dia===0 || dia===6){
+      console.log('Fin de semana: no se envía el reporte automático');
+      return;
+    }
+    enviarReporteATodos().catch(console.error);
+  }
+}
+setInterval(checkSchedule, 60*1000);
 
 // ══════════════════════════════════════
 // TELEGRAM API
@@ -346,6 +514,16 @@ async function processUpdate(update){
 
     if(text==='/start'||text==='/menu'){
       await sendMainMenu(chatId);
+    } else if(text==='/reporte'){
+      await sendMessage(chatId,'⏳ Generando reporte...');
+      const reporte = await generarReporteDiario();
+      await sendMessage(chatId, reporte);
+    } else if(text==='/suscribir'){
+      addSub(chatId);
+      await sendMessage(chatId,'✅ *Suscrito!*\n\nRecibirás el reporte diario automático a las 22:00 (hora España).');
+    } else if(text==='/desuscribir'){
+      removeSub(chatId);
+      await sendMessage(chatId,'❌ Desuscrito del reporte diario.');
     } else {
       await sendMainMenu(chatId);
     }
@@ -361,7 +539,12 @@ async function processUpdate(update){
       return;
     }
 
-    if(data.startsWith('eq:')){
+    if(data.startsWith('grupo:')){
+      const grupo=data.replace('grupo:','');
+      userState[chatId]={...userState[chatId],grupo};
+      await sendGrupoMenu(chatId,grupo);
+
+    } else if(data.startsWith('eq:')){
       const equipo=data.replace('eq:','');
       userState[chatId]={...userState[chatId],equipo};
       await sendAccionMenu(chatId,equipo);
@@ -387,12 +570,6 @@ async function processUpdate(update){
 
       if(accion==='back'||!equipo&&accion!=='dashboard'){
         await sendMainMenu(chatId);
-        return;
-      }
-
-      if(esFinDeSemana()){
-        await sendMessage(chatId,'📴 *Reportes no disponibles los fines de semana.*\n\nLos reportes están activos de lunes a viernes. ¡Nos vemos el lunes! 😊',
-          {reply_markup:{inline_keyboard:[[{text:'◀️ Menú principal',callback_data:'main:back'}]]}});
         return;
       }
 

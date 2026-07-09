@@ -51,6 +51,12 @@ try { subscribers = new Set(JSON.parse(fs.readFileSync(SUBS_FILE,'utf8'))); } ca
 function saveSubs(){ try{ fs.writeFileSync(SUBS_FILE, JSON.stringify([...subscribers])); }catch(e){} }
 function addSub(id){ subscribers.add(String(id)); saveSubs(); }
 function removeSub(id){ subscribers.delete(String(id)); saveSubs(); }
+// ---- HITOS / FELICITACIONES ----
+const MILESTONES = [500000, 1000000, 1500000, 2000000, 2500000, 3000000];
+const HITOS_FILE = '/tmp/aurum_hitos.json';
+let hitos = { mes:'', ingresos:[], equipos:[] };
+try { hitos = JSON.parse(fs.readFileSync(HITOS_FILE,'utf8')); } catch(e) {}
+function saveHitos(){ try{ fs.writeFileSync(HITOS_FILE, JSON.stringify(hitos)); }catch(e){} }
 
 // ══════════════════════════════════════
 // CACHE
@@ -468,7 +474,30 @@ function checkSchedule(){
   }
 }
 setInterval(checkSchedule, 60*1000);
-
+async function checkHitos(){
+  if(subscribers.size===0) return;
+  const {dash,res} = await getData();
+  const mesKey = `${MESES[new Date().getMonth()]} ${new Date().getFullYear()}`;
+  const fecha  = new Date().toLocaleDateString('es-ES',{day:'numeric',month:'long',year:'numeric'});
+  if(hitos.mes !== mesKey){ hitos = { mes: mesKey, ingresos: [], equipos: [] }; saveHitos(); }
+  const total = (dash&&dash[0]) ? parseMoney(dash[0]['Total ingresos']) : 0;
+  for(const m of MILESTONES){
+    if(total>=m && !hitos.ingresos.includes(m)){
+      hitos.ingresos.push(m); saveHitos();
+      const msg = `🎉 *¡FELICITACIONES!* 🎉\n\nHemos alcanzado *${fmt(m)}* en ingresos.\n📅 _${fecha}_\n\n¡A seguir así! 🚀`;
+      for(const chatId of subscribers){ try{ await sendMessage(chatId, msg); }catch(e){} }
+    }
+  }
+  for(const r of (res||[])){
+    if(r._meta>0 && r._ing>=r._meta && !hitos.equipos.includes(r['Equipo'])){
+      hitos.equipos.push(r['Equipo']); saveHitos();
+      const emoji = EMOJIS[r['Equipo']] || '🏆';
+      const msg = `🏆 *¡TARGET CUMPLIDO!* 🏆\n\n${emoji} *${r['Equipo']}* cumplió su meta de *${fmt(r._meta)}*.\n💰 Lograron: *${fmt(r._ing)}*\n📅 _${fecha}_\n\n¡Enhorabuena equipo! 👏`;
+      for(const chatId of subscribers){ try{ await sendMessage(chatId, msg); }catch(e){} }
+    }
+  }
+}
+setInterval(()=>{ checkHitos().catch(console.error); }, 60*1000);
 // ══════════════════════════════════════
 // TELEGRAM API
 // ══════════════════════════════════════

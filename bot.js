@@ -405,6 +405,13 @@ async function responderDashboard(state){
 // ══════════════════════════════════════
 // REPORTE DIARIO COMPLETO
 // ══════════════════════════════════════
+function factorEsperado(){
+  const d = new Date().getDate();
+  if(d <= 8) return 0.25;
+  if(d <= 15) return 0.50;
+  if(d <= 25) return 0.75;
+  return 1.00;
+}
 async function generarReporteDiario(){
   const {res} = await getData();
   const fecha = new Date().toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
@@ -426,7 +433,7 @@ async function generarReporteDiario(){
     const meta = r._meta;
     const pct = meta>0 ? (ing/meta*100) : (parseFloat(String(r['% De avance']||'0').replace('%',''))||0);
     const emoji = EMOJIS[eq] || '🏢';
-    const estado = pct>=80?'✅':pct>=40?'⚠️':'🔴';
+    const estado = pct>=factorEsperado()*100?'✅':pct>=factorEsperado()*70?'⚠️':'🔴';
     msg += `\n${emoji} *${eq}*: ${fmt(ing)}`;
     if(meta>0) msg += ` / ${fmtK(meta)} (${pct.toFixed(0)}% ${estado})`;
   });
@@ -435,7 +442,7 @@ async function generarReporteDiario(){
   const alertas = equiposRes.filter(r=>{
     const meta = r._meta;
     const pct = meta>0 ? (r._ing/meta*100) : (parseFloat(String(r['% De avance']||'0').replace('%',''))||0);
-    return pct < 40;
+    return pct < factorEsperado()*70;
   });
   if(alertas.length){
     msg += `\n\n🚨 *ALERTAS - EQUIPOS EN ROJO*\n`;

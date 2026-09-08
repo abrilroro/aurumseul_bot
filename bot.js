@@ -20,11 +20,12 @@ const SHEETS = {
 };
 
 const GRUPOS = {
-  'Aurum': ['Aurum House','PE','EC','Orbex','Corm'],
-  'Seul':  ['Seul','CR'],
+  'Aurum': ['Aurum House','Aurum House PE','Aurum House EC','Aurum House Orbex','Aurum House Corm','Aurum PY central'],
+  'Seul':  ['Seul EC','Seul CR'],
+  'Euroinvest': ['Euroinvest Million'],
 };
-const EQUIPOS = ['Aurum House','PE','EC','CR','Corm','Orbex','Seul'];
-const EMOJIS  = {'Aurum House':'👑','PE':'💎','EC':'🚀','CR':'💹','Corm':'⚡','Orbex':'🔥','Seul':'💰'};
+const EQUIPOS = ['Aurum House','Aurum House PE','Aurum House EC','Aurum House Orbex','Aurum House Corm','Aurum PY central','Seul EC','Seul CR','Euroinvest Million'];
+const EMOJIS  = {'Aurum House':'👑','Aurum House PE':'💎','Aurum House EC':'🚀','Aurum House Orbex':'🔥','Aurum House Corm':'⚡','Aurum PY central':'🏢','Seul EC':'💫','Seul CR':'💹','Euroinvest Million':'💶'};
 const MESES   = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
 // ══════════════════════════════════════
@@ -88,8 +89,7 @@ function progBar(pct,len=10){
 }
 function norm(s){ return (s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim(); }
 function normEq(e){
-  const map={'aurum house':'Aurum House','pe':'PE','ec':'EC','cr':'CR','corm':'Corm','seul':'Seul','orbex':'Orbex'};
-  return map[(e||'').toLowerCase().trim()]||(e||'').trim();
+  const map={'aurum house':'Aurum House','aurum house pe':'Aurum House PE','aurum house ec':'Aurum House EC','aurum house orbex':'Aurum House Orbex','aurum house corm':'Aurum House Corm','aurum py central':'Aurum PY central','seul ec':'Seul EC','seul cr':'Seul CR','euroinvest million':'Euroinvest Million'};  return map[(e||'').toLowerCase().trim()]||(e||'').trim();
 }
 function getMesActual(data){
   const mesNombre = MESES[new Date().getMonth()];
@@ -183,6 +183,7 @@ async function sendMainMenu(chatId){
   const mesLabel = getMesLabel(userState[chatId]);
   const buttons = [
     [{text:'🏆 Aurum', callback_data:'grupo:Aurum'}, {text:'💫 Seul', callback_data:'grupo:Seul'}],
+        [{text:'💶 Euroinvest', callback_data:'grupo:Euroinvest'}],
     [{text:'⚡ Dashboard Total', callback_data:'acc:dashboard'}],
     [{text:`📅 Cambiar mes (${mesLabel})`, callback_data:'main:mes'}],
   ];

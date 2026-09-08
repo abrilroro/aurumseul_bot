@@ -384,7 +384,20 @@ async function responderDashboard(state){
     msg+=`   💳 Nómina: ${fmt(seulNomina)}\n`;
     msg+=`   ${seulBalance>=0?'✅':'🔴'} Balance: *${seulBalance>=0?'+':''}${fmt(seulBalance)}*\n`;
   }
-
+  const rowEuro = dash.find(r => String(Object.values(r)[0]||'').toUpperCase().includes('EUROINVEST'));
+  if(rowEuro){
+    const valsEuro=Object.values(rowEuro);
+    const euroNombre=valsEuro[0]||'Euroinvest';
+    const euroPagos=parseMoney(valsEuro[1]);
+    const euroIngresos=parseMoney(valsEuro[2]);
+    const euroNomina=parseMoney(valsEuro[4]);
+    const euroBalance=parseMoney(valsEuro[5]);
+    msg+=`\n💶 *${euroNombre}*\n`;
+    msg+=`   💰 Ingresos: ${fmt(euroIngresos)}\n`;
+    msg+=`   🌐 Tráfico: ${fmt(euroPagos)}\n`;
+    msg+=`   💳 Nómina: ${fmt(euroNomina)}\n`;
+    msg+=`   ${euroBalance>=0?'✅':'🔴'} Balance: *${euroBalance>=0?'+':''}${fmt(euroBalance)}*\n`;
+  }
   return msg;
 }
 

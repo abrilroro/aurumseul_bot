@@ -90,6 +90,8 @@ function progBar(pct,len=10){
 function norm(s){ return (s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim(); }
 function normEq(e){
    const map={'aurum house':'Aurum House','aurum house pe':'Aurum House PE','aurum house ec':'Aurum House EC','aurum house orbex':'Aurum House Orbex','aurum house corm':'Aurum House Corm','aurum py central':'Aurum PY central','aurum arcom':'Aurum ARCOM','seul ec':'Seul EC','seul cr':'Seul CR','euroinvest million':'Euroinvest Million'};
+  return map[(e||'').toLowerCase().trim()]||(e||'').trim();
+}
 function getMesActual(data){
   const mesNombre = MESES[new Date().getMonth()];
   const year = String(new Date().getFullYear());

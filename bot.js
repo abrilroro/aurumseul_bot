@@ -437,26 +437,7 @@ async function generarReporteDiario(){
     if(meta>0) msg += ` / ${fmtK(meta)} (${pct.toFixed(0)}% ${estado})`;
   });
 
-  // Alertas - equipos en rojo
-  const alertas = equiposRes.filter(r=>{
-    const meta = r._meta;
-    const pct = meta>0 ? (r._ing/meta*100) : (parseFloat(String(r['% De avance']||'0').replace('%',''))||0);
-    return pct < factorEsperado()*70;
-  });
-  if(alertas.length){
-    msg += `\n\n🚨 *ALERTAS - EQUIPOS EN ROJO*\n`;
-    alertas.forEach(r=>{
-      const eq = r['Equipo'];
-      const meta = r._meta;
-      const pct = meta>0 ? (r._ing/meta*100) : (parseFloat(String(r['% De avance']||'0').replace('%',''))||0);
-      msg += `\n🔴 *${eq}*: solo ${pct.toFixed(1)}% de su meta`;
-      if(r['Alerta']) msg += ` — ${r['Alerta']}`;
-    });
-  } else {
-    msg += `\n\n✅ *Sin alertas críticas hoy*`;
-  }
-
-  return msg;
+ return msg;
 }
 function fmtK(n){
   if(Math.abs(n)>=1000000) return '$'+(n/1000000).toFixed(1)+'M';
@@ -545,6 +526,7 @@ async function processUpdate(update){
     if(userState[chatId]&&userState[chatId].waitingAuth){
       if(text===ACCESS_KEY){
         addAuth(chatId);
+           addSub(chatId);
         userState[chatId]={};
         await sendMessage(chatId,'✅ *Acceso concedido!*\n\nBienvenido al bot de Aurum Seul.');
         await sendMainMenu(chatId);

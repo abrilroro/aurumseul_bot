@@ -401,6 +401,20 @@ async function responderDashboard(state){
     msg+=`   💳 Nómina: ${fmt(euroNomina)}\n`;
     msg+=`   ${euroBalance>=0?'✅':'🔴'} Balance: *${euroBalance>=0?'+':''}${fmt(euroBalance)}*\n`;
   }
+    const rowHigh = dash.find(r => String(Object.values(r)[0]||'').toUpperCase().includes('HIGH'));
+  if(rowHigh){
+    const valsHigh=Object.values(rowHigh);
+    const highNombre=valsHigh[0]||'High Conversion';
+    const highPagos=parseMoney(valsHigh[1]);
+    const highIngresos=parseMoney(valsHigh[2]);
+    const highNomina=parseMoney(valsHigh[4]);
+    const highBalance=parseMoney(valsHigh[5]);
+    msg+=`\n⭐ *${highNombre}*\n`;
+    msg+=`   💰 Ingresos: ${fmt(highIngresos)}\n`;
+    msg+=`   🌐 Tráfico: ${fmt(highPagos)}\n`;
+    msg+=`   💳 Nómina: ${fmt(highNomina)}\n`;
+    msg+=`   ${highBalance>=0?'✅':'🔴'} Balance: *${highBalance>=0?'+':''}${fmt(highBalance)}*\n`;
+  }
   return msg;
 }
 

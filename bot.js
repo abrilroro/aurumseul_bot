@@ -527,8 +527,7 @@ async function processUpdate(update){
       if(text===ACCESS_KEY){
         addAuth(chatId);
            addSub(chatId);
-        userState[chatId]={};
-        await sendMessage(chatId,'✅ *Acceso concedido!*\n\nBienvenido al bot de Aurum Seul.');
+        userState[chatId]={};      await sendMessage(chatId,'✅ *Acceso concedido!*\n\nBienvenido al bot de Aurum Seul.\n\n🔔 Quedaste suscrito a los reportes automáticamente.');
         await sendMainMenu(chatId);
       } else {
         await sendMessage(chatId,'❌ *Clave incorrecta.* Intenta de nuevo:');
